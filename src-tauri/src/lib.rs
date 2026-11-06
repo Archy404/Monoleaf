@@ -10,6 +10,7 @@ use tauri_plugin_updater::Update;
 
 mod filewatch;
 pub mod pdfimport;
+pub mod references;
 
 use filewatch::FileWatches;
 
