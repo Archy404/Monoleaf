@@ -182,6 +182,40 @@ pub fn read_bibliography(
     .map_err(|e| format!("{path}: {e}"))
 }
 
+/// Everything the header of the document at `document_path` names: the
+/// inline `references:` list first, then each `bibliography:` file in header
+/// order. A file that cannot be read becomes a warning, so the editor keeps
+/// what the other sources gave. An unsaved document has no folder for the
+/// files to be relative to, so they wait until it is saved.
+pub fn load(document_path: Option<&str>, front_matter: &str, allow_network: bool) -> References {
+    let mut found = match references_from_csl_yaml(front_matter) {
+        Ok(inline) => inline,
+        Err(problem) => {
+            return References {
+                entries: Vec::new(),
+                warnings: vec![format!("header: {problem}")],
+            }
+        }
+    };
+    let dir = document_path.map(Path::new).and_then(Path::parent);
+    for path in bibliography_paths(front_matter).unwrap_or_default() {
+        let result = match dir {
+            Some(dir) => read_bibliography(dir, &path, allow_network),
+            None => Err(format!(
+                "{path}: save the document first, the path is relative to it"
+            )),
+        };
+        match result {
+            Ok(more) => {
+                found.entries.extend(more.entries);
+                found.warnings.extend(more.warnings);
+            }
+            Err(problem) => found.warnings.push(problem),
+        }
+    }
+    found
+}
+
 fn summarize_items(items: &[Item]) -> References {
     let mut references = References::default();
     for (index, item) in items.iter().enumerate() {
@@ -407,6 +441,28 @@ mod tests {
             assert!(read("link.bib").unwrap_err().ends_with("folder is read"));
             let _ = fs::remove_file(outside);
         }
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn load_joins_the_inline_list_and_the_files_and_warns_per_problem() {
+        let dir = std::env::temp_dir().join(format!("monoleaf_load-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(&dir).unwrap();
+        fs::write(dir.join("refs.bib"), SAMPLE).unwrap();
+        let doc = dir.join("paper.md");
+        let header = "bibliography:\n- refs.bib\n- missing.bib\nreferences:\n- id: inline\n  title: Inline\n";
+        let found = load(doc.to_str(), header, false);
+        let keys: Vec<&str> = found.entries.iter().map(|e| e.key.as_str()).collect();
+        assert_eq!(
+            keys,
+            ["inline", "doe2020", "ERA5LandHourlyData2019", "bare"]
+        );
+        assert_eq!(found.warnings, ["missing.bib: not found"]);
+        let unsaved = load(None, header, false);
+        assert_eq!(unsaved.entries.len(), 1);
+        assert!(unsaved.warnings[0].starts_with("refs.bib: save the document first"));
+        assert!(load(None, "references: [\n", false).warnings[0].starts_with("header: "));
         let _ = fs::remove_dir_all(&dir);
     }
 
