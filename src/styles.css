@@ -2160,12 +2160,13 @@ html.theme-dark #editor .cm-cursor {
   }
 }
 
-/* Citation completion: the list after `@` and the title beside the chosen
-   entry. The package's own colours are for a light page and the entry's
-   title would come out white on white in dark mode, so both follow the
-   app's menus instead. */
+/* Citation completion and hover: the list after `@`, the title beside the
+   chosen entry, and the box over a citation key. The package's own colours
+   are for a light page and the entry's title would come out white on white
+   in dark mode, so all three follow the app's menus instead. */
 .cm-tooltip.cm-tooltip-autocomplete,
-.cm-tooltip.cm-completionInfo {
+.cm-tooltip.cm-completionInfo,
+.cm-tooltip.cm-citation-hover {
   background: var(--panel);
   color: var(--text);
   border: 1px solid var(--border);
@@ -2184,6 +2185,13 @@ html.theme-dark #editor .cm-cursor {
 
 .cm-tooltip.cm-completionInfo {
   padding: 6px 10px;
+}
+
+/* Authors and year on the first line, the title on the second. */
+.cm-tooltip.cm-citation-hover {
+  padding: 6px 10px;
+  max-width: 480px;
+  white-space: pre-line;
 }
 
 .cm-completionDetail {

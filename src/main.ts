@@ -52,7 +52,7 @@ import {
   serializeDocument,
   toDocumentLineBreaks,
 } from "./document";
-import { citationCompletion } from "./citations";
+import { citationCompletion, citationHover } from "./citations";
 import { applyMeta, parseMeta, type DocMeta, type MetaFormat } from "./meta";
 import { syncReferences } from "./references";
 import { PortabilityMode, portabilityExtensions } from "./portability";
@@ -2386,6 +2386,7 @@ const editorExtensions = () => [
   commentsExtension(),
   criticExtension(),
   citationCompletion(),
+  citationHover(),
   EditorView.lineWrapping,
   EditorView.updateListener.of((update) => {
     if (update.docChanged) {
