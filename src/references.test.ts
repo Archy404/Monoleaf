@@ -3,7 +3,12 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 const { invokeMock } = vi.hoisted(() => ({ invokeMock: vi.fn() }));
 vi.mock("@tauri-apps/api/core", () => ({ invoke: invokeMock }));
 
-import { resetReferencesForTests, syncReferences } from "./references";
+import {
+  currentReferences,
+  resetReferencesForTests,
+  syncReferences,
+  type References,
+} from "./references";
 
 const found = {
   entries: [{ key: "doe", authors: [], year: null, title: "" }],
@@ -41,5 +46,27 @@ describe("syncReferences", () => {
     await syncReferences("/d/a.md", withBib.replace("refs", "other"));
     await syncReferences("/d/b.md", withBib.replace("refs", "other"));
     expect(invokeMock).toHaveBeenCalledTimes(3);
+  });
+
+  it("drops a result that a newer header overtook", async () => {
+    let finishFirst: (refs: References) => void = () => {};
+    invokeMock.mockReturnValueOnce(
+      new Promise<References>((resolve) => (finishFirst = resolve)),
+    );
+    const first = syncReferences("/d/a.md", withBib);
+    expect(
+      await syncReferences("/d/a.md", withBib.replace("refs", "other")),
+    ).toEqual(found);
+    finishFirst({ ...found, warnings: ["stale"] });
+    await first;
+    expect(currentReferences()).toEqual(found);
+  });
+
+  it("turns a failed call into a warning", async () => {
+    invokeMock.mockRejectedValueOnce(new Error("no backend"));
+    expect(await syncReferences("/d/a.md", withBib)).toEqual({
+      entries: [],
+      warnings: ["references: Error: no backend"],
+    });
   });
 });

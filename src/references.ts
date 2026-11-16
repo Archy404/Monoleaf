@@ -41,7 +41,8 @@ const fromBackend: Loader = (documentPath, frontMatter) =>
 /**
  * Bring the list in line with the document at `path` and its `text`. Only a
  * changed path or header loads again, and only a header that names references
- * asks the backend. Returns the list that is current afterwards.
+ * asks the backend. A failed call becomes a warning, so the editor goes on
+ * with an empty list. Returns the list that is current afterwards.
  */
 export async function syncReferences(
   path: string | null,
@@ -52,7 +53,17 @@ export async function syncReferences(
   if (path === loadedPath && header === loadedHeader) return current;
   loadedPath = path;
   loadedHeader = header;
-  current = NAMES_REFERENCES.test(header) ? await load(path, header) : NONE;
+  if (!NAMES_REFERENCES.test(header)) {
+    current = NONE;
+    return current;
+  }
+  const loaded = await load(path, header).catch((e: unknown) => ({
+    entries: [],
+    warnings: [`references: ${String(e)}`],
+  }));
+  // A newer header or document overtook this load; its result is stale.
+  if (path !== loadedPath || header !== loadedHeader) return current;
+  current = loaded;
   return current;
 }
 
