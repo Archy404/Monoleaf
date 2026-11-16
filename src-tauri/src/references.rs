@@ -4,6 +4,7 @@
 //! this module is a short summary per entry, the same for every source format.
 
 use hayagriva::citationberg::json::{FixedDateRange, Item, NameValue, Value};
+use std::fs;
 use std::path::{Component, Path, PathBuf};
 
 /// One reference, as the editor lists it.
@@ -153,11 +154,20 @@ pub fn read_bibliography(
     let file = bibliography_file(document_dir, path)?;
     let file_str = file.to_string_lossy();
     crate::validate_path(&file_str, allow_network)?;
+    // A link inside the folder can still lead out of it; the resolved path
+    // has to stay below the resolved folder.
+    let resolved = fs::canonicalize(&file).map_err(|e| match e.kind() {
+        std::io::ErrorKind::NotFound => format!("{path}: not found"),
+        _ => format!("{path}: {e}"),
+    })?;
+    let root = fs::canonicalize(document_dir).map_err(|e| e.to_string())?;
+    if !resolved.starts_with(&root) {
+        return Err(format!(
+            "{path}: only a file in the document's folder is read"
+        ));
+    }
     let bytes = crate::read_capped(&file_str, BIBLIOGRAPHY_MAX_BYTES)
-        .map_err(|e| match e.kind() {
-            std::io::ErrorKind::NotFound => format!("{path}: not found"),
-            _ => format!("{path}: {e}"),
-        })?
+        .map_err(|e| format!("{path}: {e}"))?
         .ok_or_else(|| format!("{path}: larger than {} MB", BIBLIOGRAPHY_MAX_BYTES >> 20))?;
     let text = String::from_utf8(bytes).map_err(|_| format!("{path}: not UTF-8 text"))?;
     match file
@@ -234,7 +244,6 @@ fn line_of(position: usize, text: &str) -> usize {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::fs;
 
     const SAMPLE: &str = r#"@article{doe2020,
   author = {Doe, Jane and van der Roe, Richard},
@@ -389,6 +398,15 @@ mod tests {
         assert_eq!(read("refs.json").unwrap().entries[0].title, "From JSON");
         assert_eq!(read("refs.yml").unwrap().entries[0].key, "y");
         assert_eq!(read("missing.bib"), Err("missing.bib: not found".into()));
+        #[cfg(unix)]
+        {
+            // A link that leads out of the folder is refused like `..`.
+            let outside = dir.with_extension("outside.bib");
+            fs::write(&outside, SAMPLE).unwrap();
+            std::os::unix::fs::symlink(&outside, dir.join("link.bib")).unwrap();
+            assert!(read("link.bib").unwrap_err().ends_with("folder is read"));
+            let _ = fs::remove_file(outside);
+        }
         let _ = fs::remove_dir_all(&dir);
     }
 
