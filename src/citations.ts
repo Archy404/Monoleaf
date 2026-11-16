@@ -11,8 +11,13 @@ import {
   type CompletionContext,
   type CompletionResult,
 } from "@codemirror/autocomplete";
-import type { Extension } from "@codemirror/state";
-import { currentReferences, type References } from "./references";
+import type { EditorState, Extension } from "@codemirror/state";
+import { hoverTooltip } from "@codemirror/view";
+import {
+  currentReferences,
+  type References,
+  type ReferenceSummary,
+} from "./references";
 
 /** A citation around a position: `from` is the `@`, `to` the end of the key. */
 export interface Citation {
@@ -86,4 +91,47 @@ export function citationCompletions(
 /** `@` opens the citation list, with no icons: every entry is a reference. */
 export function citationCompletion(): Extension {
   return autocompletion({ override: [citationCompletions], icons: false });
+}
+
+/** The entry as the hover shows it: who and when on one line, the title below. */
+export function describeReference(entry: ReferenceSummary): string {
+  const who = entry.authors.length > 0 ? entry.authors.join("; ") : "No author";
+  const when = entry.year === null ? "" : ` (${entry.year})`;
+  return `${who}${when}\n${entry.title || "No title"}`;
+}
+
+/** What the hover at `pos` shows and the range it belongs to, or null. */
+export function citationHoverAt(
+  state: EditorState,
+  pos: number,
+  references: () => References = currentReferences,
+): { from: number; to: number; text: string } | null {
+  const line = state.doc.lineAt(pos);
+  const citation = citationAt(line.text, pos - line.from);
+  if (citation === null || citation.key === "") return null;
+  const entry = references().entries.find((e) => e.key === citation.key);
+  return {
+    from: line.from + citation.from,
+    to: line.from + citation.to,
+    text: entry ? describeReference(entry) : `${citation.key}: not found`,
+  };
+}
+
+/** Hovering a citation key shows its entry; the text goes in as text only. */
+export function citationHover(): Extension {
+  return hoverTooltip((view, pos) => {
+    const hover = citationHoverAt(view.state, pos);
+    if (hover === null) return null;
+    return {
+      pos: hover.from,
+      end: hover.to,
+      above: true,
+      create() {
+        const dom = document.createElement("div");
+        dom.className = "cm-citation-hover";
+        dom.textContent = hover.text;
+        return { dom };
+      },
+    };
+  });
 }
