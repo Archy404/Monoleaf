@@ -2159,3 +2159,35 @@ html.theme-dark #editor .cm-cursor {
     margin: 0;
   }
 }
+
+/* Citation completion: the list after `@` and the title beside the chosen
+   entry. The package's own colours are for a light page and the entry's
+   title would come out white on white in dark mode, so both follow the
+   app's menus instead. */
+.cm-tooltip.cm-tooltip-autocomplete,
+.cm-tooltip.cm-completionInfo {
+  background: var(--panel);
+  color: var(--text);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  box-shadow: 0 10px 34px rgba(0, 0, 0, 0.24);
+}
+
+.cm-tooltip.cm-tooltip-autocomplete > ul > li {
+  padding: 4px 10px;
+}
+
+.cm-tooltip.cm-tooltip-autocomplete > ul > li[aria-selected] {
+  background: var(--accent-soft);
+  color: var(--text);
+}
+
+.cm-tooltip.cm-completionInfo {
+  padding: 6px 10px;
+}
+
+.cm-completionDetail {
+  margin-left: 0.6em;
+  color: var(--muted);
+  font-style: normal;
+}
