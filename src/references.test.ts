@@ -5,7 +5,9 @@ vi.mock("@tauri-apps/api/core", () => ({ invoke: invokeMock }));
 
 import {
   currentReferences,
+  describeSources,
   forgetLoadedReferences,
+  referencesLabel,
   resetReferencesForTests,
   syncReferences,
   type References,
@@ -94,5 +96,56 @@ describe("syncReferences", () => {
       warnings: ["references: Error: no backend"],
       sources: [],
     });
+  });
+});
+
+describe("the panel text", () => {
+  const loaded: References = {
+    entries: [{ key: "a", authors: [], year: null, title: "" }],
+    warnings: [
+      "header: entry 2 skipped, it has no id",
+      "missing.bib: not found",
+      "refs.bib: line 16: entry odd skipped, wrong number of digits",
+    ],
+    sources: [
+      { name: "header", entries: 1 },
+      { name: "refs.bib", entries: 3 },
+      { name: "missing.bib", entries: 0 },
+    ],
+  };
+
+  it("labels the status bar with the counts, or not at all", () => {
+    expect(referencesLabel({ entries: [], warnings: [], sources: [] })).toBe(
+      "",
+    );
+    expect(referencesLabel({ ...loaded, warnings: [] })).toBe("1 reference");
+    expect(referencesLabel(loaded)).toBe("1 reference, 3 warnings");
+  });
+
+  it("lists every source with its count and its own warnings", () => {
+    expect(describeSources(loaded)).toEqual([
+      {
+        name: "header",
+        summary: "1 entry",
+        warnings: ["entry 2 skipped, it has no id"],
+      },
+      {
+        name: "refs.bib",
+        summary: "3 entries",
+        warnings: ["line 16: entry odd skipped, wrong number of digits"],
+      },
+      { name: "missing.bib", summary: "not read", warnings: ["not found"] },
+    ]);
+  });
+
+  it("gives a warning without a source a line of its own", () => {
+    const broken: References = {
+      entries: [],
+      warnings: ["header: bad YAML at line 2"],
+      sources: [],
+    };
+    expect(describeSources(broken)).toEqual([
+      { name: "header", summary: "", warnings: ["bad YAML at line 2"] },
+    ]);
   });
 });

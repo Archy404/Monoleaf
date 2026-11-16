@@ -91,6 +91,52 @@ export function forgetLoadedReferences(): void {
   loadedHeader = null;
 }
 
+function count(n: number, one: string, many: string): string {
+  return `${n} ${n === 1 ? one : many}`;
+}
+
+/** The status-bar entry: "" for a document without references, else the
+ * counts, "4 references, 1 warning". */
+export function referencesLabel(refs: References): string {
+  if (refs.sources.length === 0 && refs.warnings.length === 0) return "";
+  const parts = [count(refs.entries.length, "reference", "references")];
+  if (refs.warnings.length > 0)
+    parts.push(count(refs.warnings.length, "warning", "warnings"));
+  return parts.join(", ");
+}
+
+/** One source of the panel's list with the warnings that name it. */
+export interface SourceLine {
+  name: string;
+  summary: string;
+  warnings: string[];
+}
+
+/** The panel's lines: every source in header order, then any source only a
+ * warning names (the header when its YAML did not parse). A warning loses the
+ * name it starts with, since its line carries that. */
+export function describeSources(refs: References): SourceLine[] {
+  const lines: SourceLine[] = refs.sources.map((source) => ({
+    name: source.name,
+    summary: count(source.entries, "entry", "entries"),
+    warnings: [],
+  }));
+  for (const warning of refs.warnings) {
+    const name = warning.slice(0, warning.indexOf(": "));
+    let line = lines.find((l) => l.name === name);
+    if (line === undefined) {
+      line = { name: name || "other", summary: "", warnings: [] };
+      lines.push(line);
+    }
+    line.warnings.push(warning.slice(name.length + 2));
+  }
+  for (const line of lines) {
+    if (line.summary === "0 entries" && line.warnings.length > 0)
+      line.summary = "not read";
+  }
+  return lines;
+}
+
 export function resetReferencesForTests(): void {
   current = NONE;
   loadedPath = null;
