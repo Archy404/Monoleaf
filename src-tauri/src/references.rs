@@ -4,6 +4,7 @@
 //! this module is a short summary per entry, the same for every source format.
 
 use hayagriva::citationberg::json::{FixedDateRange, Item, NameValue, Value};
+use std::collections::HashSet;
 use std::fs;
 use std::path::{Component, Path, PathBuf};
 
@@ -28,33 +29,115 @@ pub struct References {
 /// The entries of a `.bib` file, in file order.
 ///
 /// hayagriva reads a file as a whole and refuses all of it over one entry it
-/// cannot interpret (`year = {in press}`). An editor is better served by the
-/// rest of the library, so in that case the file is read again entry by
-/// entry: what converts is kept, and each skipped entry gives a warning with
-/// its line. A file that does not parse at all gives only that problem.
-pub fn references_from_biblatex(text: &str) -> Result<References, String> {
+/// cannot take. Real files have such entries (Crossref exports `month = July`
+/// and repeats keys, authors write `year = {in press}`), and an editor is
+/// better served by the rest of the library. So the file is then read entry
+/// by entry: what converts is kept, and each entry skipped gives a warning
+/// with its line.
+pub fn references_from_biblatex(text: &str) -> References {
     if let Ok(library) = hayagriva::io::from_biblatex_str(text) {
         let entries = library.iter().map(summarize).collect();
-        return Ok(References {
+        return References {
             entries,
             warnings: Vec::new(),
-        });
+        };
     }
-    let bibliography = biblatex::Bibliography::parse(text)
-        .map_err(|e| format!("line {}: {}", line_of(e.span.start, text), e.kind))?;
-    let mut references = References::default();
-    for raw in bibliography.iter() {
-        match hayagriva::Entry::try_from(raw) {
-            Ok(entry) => references.entries.push(summarize(&entry)),
-            Err(e) => references.warnings.push(format!(
-                "line {}: entry {} skipped, {}",
-                line_of(e.span.start, text),
-                raw.key,
-                e.kind
-            )),
+    let mut found = References::default();
+    let mut definitions = String::new();
+    let mut keys = HashSet::new();
+    for (line, chunk) in entry_chunks(text) {
+        let Some(bibliography) = parse_chunk(chunk, line, &mut definitions, &mut found.warnings)
+        else {
+            continue;
+        };
+        // An abbreviation defined here serves the entries after it.
+        if chunk[1..]
+            .trim_start()
+            .to_ascii_lowercase()
+            .starts_with("string")
+        {
+            definitions.push_str(chunk);
+            definitions.push('\n');
+        }
+        for raw in bibliography.iter() {
+            if !keys.insert(raw.key.clone()) {
+                found.warnings.push(format!(
+                    "line {line}: key {} is used again, this entry is skipped",
+                    raw.key
+                ));
+                continue;
+            }
+            match hayagriva::Entry::try_from(raw) {
+                Ok(entry) => found.entries.push(summarize(&entry)),
+                Err(e) => found.warnings.push(format!(
+                    "line {}: entry {} skipped, {}",
+                    line + line_of(e.span.start, chunk) - 1,
+                    raw.key,
+                    e.kind
+                )),
+            }
         }
     }
-    Ok(references)
+    found
+}
+
+/// The file cut at every line that starts an entry (`@` at line start), each
+/// chunk with its first line number. Text before the first entry is ignored,
+/// as BibTeX does.
+fn entry_chunks(text: &str) -> Vec<(usize, &str)> {
+    let mut chunks: Vec<(usize, usize)> = Vec::new();
+    let mut offset = 0;
+    for (index, line) in text.split_inclusive('\n').enumerate() {
+        if line.trim_start().starts_with('@') {
+            chunks.push((index + 1, offset));
+        }
+        offset += line.len();
+    }
+    let ends = chunks
+        .iter()
+        .skip(1)
+        .map(|(_, start)| *start)
+        .chain([text.len()]);
+    chunks
+        .iter()
+        .zip(ends)
+        .map(|(&(line, start), end)| (line, &text[start..end]))
+        .collect()
+}
+
+/// How many undefined abbreviations one entry may use before it is skipped.
+const UNDEFINED_ABBREVIATIONS_LIMIT: usize = 16;
+
+/// One chunk parsed with the abbreviations defined so far. An abbreviation
+/// the file never defines is taken as its own text and defined for the
+/// entries after it, with a warning. Any other problem skips the chunk.
+fn parse_chunk(
+    chunk: &str,
+    line: usize,
+    definitions: &mut String,
+    warnings: &mut Vec<String>,
+) -> Option<biblatex::Bibliography> {
+    for _ in 0..UNDEFINED_ABBREVIATIONS_LIMIT {
+        // Definitions after the entry, so its lines keep their numbers.
+        let error = match biblatex::Bibliography::parse(&format!("{chunk}\n{definitions}")) {
+            Ok(bibliography) => return Some(bibliography),
+            Err(error) => error,
+        };
+        let at = line + line_of(error.span.start.min(chunk.len()), chunk) - 1;
+        match error.kind {
+            biblatex::ParseErrorKind::UnknownAbbreviation(name) => {
+                warnings.push(format!(
+                    "line {at}: abbreviation {name} is not defined, taken as text"
+                ));
+                definitions.push_str(&format!("@string{{{name} = {{{name}}}}}\n"));
+            }
+            kind => {
+                warnings.push(format!("line {at}: entry skipped, {kind}"));
+                return None;
+            }
+        }
+    }
+    None
 }
 
 fn summarize(entry: &hayagriva::Entry) -> ReferenceSummary {
@@ -175,7 +258,7 @@ pub fn read_bibliography(
         .and_then(|e| e.to_str())
         .map(str::to_ascii_lowercase)
     {
-        Some(ext) if ext == "bib" => references_from_biblatex(&text),
+        Some(ext) if ext == "bib" => Ok(references_from_biblatex(&text)),
         Some(ext) if ext == "json" => references_from_csl_json(&text),
         _ => references_from_csl_yaml(&text),
     }
@@ -296,7 +379,7 @@ mod tests {
 
     #[test]
     fn bib_entries_come_in_file_order_with_key_year_and_title() {
-        let References { entries, warnings } = references_from_biblatex(SAMPLE).unwrap();
+        let References { entries, warnings } = references_from_biblatex(SAMPLE);
         let keys: Vec<&str> = entries.iter().map(|e| e.key.as_str()).collect();
         assert_eq!(keys, ["doe2020", "ERA5LandHourlyData2019", "bare"]);
         // From `year` or `date`, and missing where the entry has neither.
@@ -309,7 +392,7 @@ mod tests {
 
     #[test]
     fn bib_authors_are_family_name_first_and_an_institution_stays_whole() {
-        let entries = references_from_biblatex(SAMPLE).unwrap().entries;
+        let entries = references_from_biblatex(SAMPLE).entries;
         assert_eq!(entries[0].authors, ["Doe, Jane", "van der Roe, Richard"]);
         assert_eq!(entries[1].authors, ["Copernicus Climate Change Service"]);
         assert!(entries[2].authors.is_empty());
@@ -318,7 +401,7 @@ mod tests {
     #[test]
     fn an_entry_that_cannot_be_read_is_skipped_with_a_warning() {
         let odd = "@article{odd,\n  title = {T},\n  year = {in press},\n}\n";
-        let found = references_from_biblatex(&format!("{SAMPLE}{odd}")).unwrap();
+        let found = references_from_biblatex(&format!("{SAMPLE}{odd}"));
         assert_eq!(found.entries.len(), 3);
         assert_eq!(
             found.warnings,
@@ -467,17 +550,37 @@ mod tests {
     }
 
     #[test]
-    fn a_bib_that_does_not_parse_reports_the_line_instead_of_entries() {
-        let unclosed = "@article{a,\n  title = {Unclosed,\n}\n";
+    fn an_undefined_abbreviation_is_taken_as_its_text_with_a_warning() {
+        let crossref =
+            "@article{a, title={T}, year={2021}, month=July}\n@misc{b, title={U}, journal=jphys}\n";
+        let found = references_from_biblatex(crossref);
+        assert_eq!(found.entries.len(), 2);
         assert_eq!(
-            references_from_biblatex(unclosed),
-            Err("line 4: expected comma".into())
+            found.warnings,
+            [
+                "line 1: abbreviation July is not defined, taken as text",
+                "line 2: abbreviation jphys is not defined, taken as text",
+            ]
         );
-        let twice = "@misc{a, title = {A}}\n@misc{a, title = {B}}\n";
+    }
+
+    #[test]
+    fn a_broken_or_repeated_entry_is_skipped_with_its_line_and_the_rest_stays() {
+        let unclosed = "@article{a,\n  title = {Unclosed,\n}\n@misc{b, title = {B}}\n";
+        let found = references_from_biblatex(unclosed);
+        assert_eq!(found.entries.len(), 1);
+        assert_eq!(found.warnings, ["line 4: entry skipped, expected comma"]);
+        let twice = "@misc{a, title = {A}}\n@misc{a, title = {B}}\n@misc{c, title = {C}}\n";
+        let found = references_from_biblatex(twice);
+        assert_eq!(found.entries.len(), 2);
         assert_eq!(
-            references_from_biblatex(twice),
-            Err("line 2: duplicate key \"a\"".into())
+            found.warnings,
+            ["line 2: key a is used again, this entry is skipped"]
         );
-        assert_eq!(references_from_biblatex(""), Ok(References::default()));
+        assert_eq!(references_from_biblatex(""), References::default());
+        assert_eq!(
+            references_from_biblatex("no entries here\n"),
+            References::default()
+        );
     }
 }
