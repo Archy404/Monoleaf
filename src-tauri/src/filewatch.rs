@@ -193,6 +193,38 @@ impl FileWatches {
     }
 }
 
+/// Emitted to the owning window when one of the reference files its header
+/// names changed or vanished on disk.
+///
+/// COUPLED: `REFERENCES_CHANGED_EVENT` in `src/main.ts`.
+pub const REFERENCES_CHANGED_EVENT: &str = "references-changed-on-disk";
+
+/// The reference files watched per window label. A document may name several
+/// `bibliography:` files, and they are replaced together whenever its header
+/// changes, so the newest header always decides what is watched.
+#[derive(Default)]
+pub struct ReferenceWatches(pub Mutex<HashMap<String, Vec<Watch>>>);
+
+impl ReferenceWatches {
+    /// Replace the watches of `label`; an empty list stops them all.
+    pub fn replace(&self, label: &str, watches: Vec<Watch>) {
+        let previous = self
+            .0
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .insert(label.to_string(), watches);
+        drop(previous);
+    }
+
+    /// Stop every watch whose path no longer passes `keep`.
+    pub fn retain(&self, keep: impl Fn(&str) -> bool) {
+        let mut all = self.0.lock().unwrap_or_else(|e| e.into_inner());
+        for watches in all.values_mut() {
+            watches.retain(|w| keep(&w.path));
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
