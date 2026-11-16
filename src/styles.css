@@ -2166,7 +2166,7 @@ html.theme-dark #editor .cm-cursor {
    in dark mode, so all three follow the app's menus instead. */
 .cm-tooltip.cm-tooltip-autocomplete,
 .cm-tooltip.cm-completionInfo,
-.cm-tooltip.cm-citation-hover {
+.cm-tooltip.cm-tooltip-hover {
   background: var(--panel);
   color: var(--text);
   border: 1px solid var(--border);
@@ -2188,7 +2188,7 @@ html.theme-dark #editor .cm-cursor {
 }
 
 /* Authors and year on the first line, the title on the second. */
-.cm-tooltip.cm-citation-hover {
+.cm-citation-hover {
   padding: 6px 10px;
   max-width: 480px;
   white-space: pre-line;
