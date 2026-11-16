@@ -53,6 +53,7 @@ import {
   toDocumentLineBreaks,
 } from "./document";
 import { applyMeta, parseMeta, type DocMeta, type MetaFormat } from "./meta";
+import { syncReferences } from "./references";
 import { PortabilityMode, portabilityExtensions } from "./portability";
 import { livePreviewExtensions } from "./livepreview";
 import { imageReferenceAt, type ImageReference } from "./imageref";
@@ -518,6 +519,23 @@ function syncFileWatch() {
   // the setting refuses, or a directory that cannot be watched. Neither is
   // worth interrupting the user over, since everything else still works.
   void invoke("watch_file", { path: currentPath }).catch(() => {});
+}
+
+/** Load the references the header names for the document as it is now. */
+function syncReferencesNow() {
+  void syncReferences(currentPath, view.state.doc.toString());
+}
+
+// Loading reads the bibliography files, so typing inside the header waits
+// for a pause rather than reading them on every keystroke.
+const REFERENCES_SYNC_DELAY_MS = 400;
+let referencesSyncTimer: number | undefined;
+function scheduleReferencesSync() {
+  clearTimeout(referencesSyncTimer);
+  referencesSyncTimer = window.setTimeout(
+    syncReferencesNow,
+    REFERENCES_SYNC_DELAY_MS,
+  );
 }
 
 /** Wait until the shared confirm dialog is free, so a prompt never overwrites
@@ -2373,6 +2391,7 @@ const editorExtensions = () => [
       scheduleDocRefresh();
       schedulePagination();
       scheduleAutosaveRecovery();
+      scheduleReferencesSync();
     }
     if (update.docChanged) refreshWordCount();
     if (update.docChanged || update.selectionSet) {
@@ -2487,6 +2506,7 @@ function loadIntoEditor(
   diskBaseline = null;
   missingOnDisk = false; // a different document; refreshTitle below shows it
   syncFileWatch();
+  syncReferencesNow();
   // A document with a path needs no suggestion; one without keeps whatever the
   // caller supplied (an import) and otherwise reverts to "Untitled".
   suggestedName = path === null ? suggested : null;
@@ -2713,8 +2733,10 @@ async function saveFile(
     autosaveErrorShown = false;
     currentPath = path;
     setCurrentDocumentPath(path);
-    // Save As moves the watch to the new file.
+    // Save As moves the watch to the new file, and the bibliography paths
+    // are relative to it.
     syncFileWatch();
+    syncReferencesNow();
     // A document saved for the first time (or saved-as to a new directory)
     // can turn previously unresolvable relative image references into
     // resolvable ones. Same reconfigure toggleRemoteImages uses: an image
