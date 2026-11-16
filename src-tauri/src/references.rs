@@ -265,21 +265,62 @@ pub fn read_bibliography(
     .map_err(|e| format!("{path}: {e}"))
 }
 
+/// One place the header named and how many entries it gave; a source that
+/// could not be read gives none, and its warning says why.
+#[derive(Clone, Debug, PartialEq, Eq, serde::Serialize)]
+pub struct Source {
+    /// `references:` for the inline list, else the path as written.
+    pub name: String,
+    pub entries: usize,
+}
+
+/// What the editor gets for a document: every entry, every warning, and the
+/// sources in header order.
+#[derive(Clone, Debug, Default, PartialEq, Eq, serde::Serialize)]
+pub struct Loaded {
+    pub entries: Vec<ReferenceSummary>,
+    pub warnings: Vec<String>,
+    pub sources: Vec<Source>,
+}
+
+impl Loaded {
+    fn add(&mut self, name: &str, result: Result<References, String>) {
+        let mut entries = 0;
+        match result {
+            Ok(found) => {
+                entries = found.entries.len();
+                self.entries.extend(found.entries);
+                self.warnings.extend(found.warnings);
+            }
+            Err(problem) => self.warnings.push(problem),
+        }
+        self.sources.push(Source {
+            name: name.to_string(),
+            entries,
+        });
+    }
+}
+
 /// Everything the header of the document at `document_path` names: the
 /// inline `references:` list first, then each `bibliography:` file in header
 /// order. A file that cannot be read becomes a warning, so the editor keeps
 /// what the other sources gave. An unsaved document has no folder for the
 /// files to be relative to, so they wait until it is saved.
-pub fn load(document_path: Option<&str>, front_matter: &str, allow_network: bool) -> References {
-    let mut found = match references_from_csl_yaml(front_matter) {
+pub fn load(document_path: Option<&str>, front_matter: &str, allow_network: bool) -> Loaded {
+    let mut loaded = Loaded::default();
+    let inline = match references_from_csl_yaml(front_matter) {
         Ok(inline) => inline,
         Err(problem) => {
-            return References {
-                entries: Vec::new(),
-                warnings: vec![format!("header: {problem}")],
-            }
+            loaded.warnings.push(format!("header: {problem}"));
+            return loaded;
         }
     };
+    if front_matter
+        .lines()
+        .any(|line| line.starts_with("references:"))
+    {
+        loaded.add("references:", Ok(inline));
+    }
     let dir = document_path.map(Path::new).and_then(Path::parent);
     for path in bibliography_paths(front_matter).unwrap_or_default() {
         let result = match dir {
@@ -288,15 +329,9 @@ pub fn load(document_path: Option<&str>, front_matter: &str, allow_network: bool
                 "{path}: save the document first, the path is relative to it"
             )),
         };
-        match result {
-            Ok(more) => {
-                found.entries.extend(more.entries);
-                found.warnings.extend(more.warnings);
-            }
-            Err(problem) => found.warnings.push(problem),
-        }
+        loaded.add(&path, result);
     }
-    found
+    loaded
 }
 
 fn summarize_items(items: &[Item]) -> References {
@@ -542,6 +577,15 @@ mod tests {
             ["inline", "doe2020", "ERA5LandHourlyData2019", "bare"]
         );
         assert_eq!(found.warnings, ["missing.bib: not found"]);
+        let sources: Vec<(&str, usize)> = found
+            .sources
+            .iter()
+            .map(|s| (s.name.as_str(), s.entries))
+            .collect();
+        assert_eq!(
+            sources,
+            [("references:", 1), ("refs.bib", 3), ("missing.bib", 0)]
+        );
         let unsaved = load(None, header, false);
         assert_eq!(unsaved.entries.len(), 1);
         assert!(unsaved.warnings[0].starts_with("refs.bib: save the document first"));

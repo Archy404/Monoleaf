@@ -1030,7 +1030,7 @@ fn find_images_named(dir: &str, name: &str) -> Result<Vec<String>, String> {
 async fn load_references(
     document_path: Option<String>,
     front_matter: String,
-) -> Result<references::References, String> {
+) -> Result<references::Loaded, String> {
     off_main_thread(move || {
         Ok(references::load(
             document_path.as_deref(),
