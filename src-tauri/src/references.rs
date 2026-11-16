@@ -72,6 +72,26 @@ fn summarize(entry: &hayagriva::Entry) -> ReferenceSummary {
 /// The entries of CSL-JSON text, the list of items a reference manager exports.
 pub fn references_from_csl_json(text: &str) -> Result<References, String> {
     let items: Vec<Item> = serde_json::from_str(text).map_err(|e| e.to_string())?;
+    Ok(summarize_items(&items))
+}
+
+/// The entries of CSL-YAML text: the `references:` list of a pandoc
+/// bibliography file or of a document's header, or a bare list of items.
+pub fn references_from_csl_yaml(text: &str) -> Result<References, String> {
+    use yaml_serde::Value as Yaml;
+    let document: Yaml = yaml_serde::from_str(text).map_err(|e| e.to_string())?;
+    let list = match document {
+        Yaml::Mapping(mut map) => map.remove("references").unwrap_or(Yaml::Null),
+        other => other,
+    };
+    let items: Vec<Item> = match list {
+        Yaml::Null => Vec::new(),
+        list => yaml_serde::from_value(list).map_err(|e| e.to_string())?,
+    };
+    Ok(summarize_items(&items))
+}
+
+fn summarize_items(items: &[Item]) -> References {
     let mut references = References::default();
     for (index, item) in items.iter().enumerate() {
         // Without an `id` there is nothing to write after `@`.
@@ -82,7 +102,7 @@ pub fn references_from_csl_json(text: &str) -> Result<References, String> {
                 .push(format!("entry {} skipped, it has no id", index + 1)),
         }
     }
-    Ok(references)
+    references
 }
 
 fn summarize_item(id: &str, item: &Item) -> ReferenceSummary {
@@ -201,6 +221,33 @@ mod tests {
         assert_eq!(warnings, ["entry 4 skipped, it has no id"]);
         let broken = references_from_csl_json("[{").unwrap_err();
         assert!(broken.contains("line 1"));
+    }
+
+    #[test]
+    fn csl_yaml_gives_the_same_items_from_a_references_list_or_a_bare_list() {
+        let header = "title: My paper\ncsl: apa\nreferences:\n- id: era5\n  type: dataset\n  title: ERA5-Land\n  author:\n  - literal: Copernicus Climate Change Service\n  issued: 2019\n";
+        let found = references_from_csl_yaml(header).unwrap();
+        assert_eq!(found.entries.len(), 1);
+        assert_eq!(found.entries[0].key, "era5");
+        assert_eq!(
+            found.entries[0].authors,
+            ["Copernicus Climate Change Service"]
+        );
+        assert_eq!(found.entries[0].year, Some(2019));
+        let bare = "- id: doe\n  title: A study\n  issued:\n    date-parts: [[2020, 3]]\n";
+        let found = references_from_csl_yaml(bare).unwrap();
+        assert_eq!(
+            (found.entries[0].year, found.entries[0].title.as_str()),
+            (Some(2020), "A study")
+        );
+        assert_eq!(
+            references_from_csl_yaml("title: No references\n"),
+            Ok(References::default())
+        );
+        assert_eq!(references_from_csl_yaml(""), Ok(References::default()));
+        assert!(references_from_csl_yaml("- id: [\n")
+            .unwrap_err()
+            .contains("line"));
     }
 
     #[test]
