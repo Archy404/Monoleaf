@@ -38,6 +38,12 @@ export function currentReferences(): References {
 const fromBackend: Loader = (documentPath, frontMatter) =>
   invoke<References>("load_references", { documentPath, frontMatter });
 
+/** Have the backend watch the files this header names, for `path`. */
+type Watcher = (path: string | null, header: string) => Promise<void>;
+
+const watchBackend: Watcher = (documentPath, frontMatter) =>
+  invoke("watch_references", { documentPath, frontMatter });
+
 /**
  * Bring the list in line with the document at `path` and its `text`. Only a
  * changed path or header loads again, and only a header that names references
@@ -48,11 +54,15 @@ export async function syncReferences(
   path: string | null,
   text: string,
   load: Loader = fromBackend,
+  watch: Watcher = watchBackend,
 ): Promise<References> {
   const header = frontMatter(text);
   if (path === loadedPath && header === loadedHeader) return current;
   loadedPath = path;
   loadedHeader = header;
+  // Always, so that a header that stopped naming files ends their watches. A
+  // watch that cannot be set only means a change goes unnoticed.
+  void watch(path, header).catch(() => {});
   if (!NAMES_REFERENCES.test(header)) {
     current = NONE;
     return current;
@@ -65,6 +75,11 @@ export async function syncReferences(
   if (path !== loadedPath || header !== loadedHeader) return current;
   current = loaded;
   return current;
+}
+
+/** A reference file changed on disk: the next sync loads again, same header. */
+export function forgetLoadedReferences(): void {
+  loadedHeader = null;
 }
 
 export function resetReferencesForTests(): void {

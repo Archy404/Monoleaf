@@ -5,6 +5,7 @@ vi.mock("@tauri-apps/api/core", () => ({ invoke: invokeMock }));
 
 import {
   currentReferences,
+  forgetLoadedReferences,
   resetReferencesForTests,
   syncReferences,
   type References,
@@ -15,6 +16,8 @@ const found = {
   warnings: [],
 };
 const withBib = "---\ntitle: T\nbibliography: refs.bib\n---\n\nbody\n";
+const calls = (command: string) =>
+  invokeMock.mock.calls.filter((call) => call[0] === command);
 
 describe("syncReferences", () => {
   beforeEach(() => {
@@ -32,7 +35,7 @@ describe("syncReferences", () => {
       entries: [],
       warnings: [],
     });
-    expect(invokeMock).not.toHaveBeenCalled();
+    expect(calls("load_references")).toHaveLength(0);
   });
 
   it("loads once per document and header, and again when either changes", async () => {
@@ -42,10 +45,29 @@ describe("syncReferences", () => {
       frontMatter: "title: T\nbibliography: refs.bib",
     });
     await syncReferences("/d/a.md", withBib.replace("body", "typed"));
-    expect(invokeMock).toHaveBeenCalledTimes(1);
+    expect(calls("load_references")).toHaveLength(1);
     await syncReferences("/d/a.md", withBib.replace("refs", "other"));
     await syncReferences("/d/b.md", withBib.replace("refs", "other"));
-    expect(invokeMock).toHaveBeenCalledTimes(3);
+    expect(calls("load_references")).toHaveLength(3);
+  });
+
+  it("has the backend watch the files of every header it sees, even one without files", async () => {
+    await syncReferences("/d/a.md", withBib);
+    await syncReferences("/d/a.md", "---\ntitle: T\n---\n");
+    expect(calls("watch_references").map((call) => call[1])).toEqual([
+      {
+        documentPath: "/d/a.md",
+        frontMatter: "title: T\nbibliography: refs.bib",
+      },
+      { documentPath: "/d/a.md", frontMatter: "title: T" },
+    ]);
+  });
+
+  it("loads the same header again after a reference file changed", async () => {
+    await syncReferences("/d/a.md", withBib);
+    forgetLoadedReferences();
+    await syncReferences("/d/a.md", withBib);
+    expect(calls("load_references")).toHaveLength(2);
   });
 
   it("drops a result that a newer header overtook", async () => {
@@ -63,7 +85,12 @@ describe("syncReferences", () => {
   });
 
   it("turns a failed call into a warning", async () => {
-    invokeMock.mockRejectedValueOnce(new Error("no backend"));
+    // The watch call comes first and must not eat the one rejection.
+    invokeMock.mockImplementation((command: string) =>
+      command === "load_references"
+        ? Promise.reject(new Error("no backend"))
+        : Promise.resolve(undefined),
+    );
     expect(await syncReferences("/d/a.md", withBib)).toEqual({
       entries: [],
       warnings: ["references: Error: no backend"],
