@@ -91,6 +91,25 @@ pub fn references_from_csl_yaml(text: &str) -> Result<References, String> {
     Ok(summarize_items(&items))
 }
 
+/// The files a header names under `bibliography:`, one path or a list of
+/// paths as pandoc allows, in header order. Paths are returned as written;
+/// where they may point is decided when they are read.
+pub fn bibliography_paths(front_matter: &str) -> Result<Vec<String>, String> {
+    use yaml_serde::Value as Yaml;
+    let document: Yaml = yaml_serde::from_str(front_matter).map_err(|e| e.to_string())?;
+    let Yaml::Mapping(map) = document else {
+        return Ok(Vec::new());
+    };
+    Ok(match map.get("bibliography") {
+        Some(Yaml::String(path)) => vec![path.clone()],
+        Some(Yaml::Sequence(list)) => list
+            .iter()
+            .filter_map(|path| path.as_str().map(str::to_string))
+            .collect(),
+        _ => Vec::new(),
+    })
+}
+
 fn summarize_items(items: &[Item]) -> References {
     let mut references = References::default();
     for (index, item) in items.iter().enumerate() {
@@ -248,6 +267,21 @@ mod tests {
         assert!(references_from_csl_yaml("- id: [\n")
             .unwrap_err()
             .contains("line"));
+    }
+
+    #[test]
+    fn bibliography_paths_come_from_one_value_or_a_list() {
+        let one = "title: T\nbibliography: refs.bib\n";
+        assert_eq!(bibliography_paths(one), Ok(vec!["refs.bib".to_string()]));
+        let many = "bibliography:\n- refs.bib\n- \"My Library.json\"\n";
+        assert_eq!(
+            bibliography_paths(many),
+            Ok(vec!["refs.bib".to_string(), "My Library.json".to_string()])
+        );
+        assert_eq!(bibliography_paths("title: T\n"), Ok(vec![]));
+        assert_eq!(bibliography_paths(""), Ok(vec![]));
+        assert_eq!(bibliography_paths("- not a header\n"), Ok(vec![]));
+        assert!(bibliography_paths("bibliography: [\n").is_err());
     }
 
     #[test]
