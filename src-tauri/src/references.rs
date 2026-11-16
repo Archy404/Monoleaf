@@ -4,6 +4,7 @@
 //! this module is a short summary per entry, the same for every source format.
 
 use hayagriva::citationberg::json::{FixedDateRange, Item, NameValue, Value};
+use std::path::{Component, Path, PathBuf};
 
 /// One reference, as the editor lists it.
 #[derive(Clone, Debug, PartialEq, Eq, serde::Serialize)]
@@ -108,6 +109,34 @@ pub fn bibliography_paths(front_matter: &str) -> Result<Vec<String>, String> {
             .collect(),
         _ => Vec::new(),
     })
+}
+
+/// The reference file formats, by extension.
+const REFERENCE_EXTS: &[&str] = &["bib", "json", "yaml", "yml"];
+
+/// Where a `bibliography:` path may point: a file in the document's folder
+/// or below, in one of the reference formats. The document chooses the path,
+/// and a document someone else wrote must not read arbitrary files or fetch
+/// anything, so an absolute path, `..`, and a web address are refused.
+pub fn bibliography_file(document_dir: &Path, path: &str) -> Result<PathBuf, String> {
+    let relative = Path::new(path);
+    let escapes = relative.is_absolute()
+        || relative
+            .components()
+            .any(|part| part == Component::ParentDir);
+    if escapes || path.contains("://") {
+        return Err(format!(
+            "{path}: only a file in the document's folder is read"
+        ));
+    }
+    let ext = relative
+        .extension()
+        .and_then(|e| e.to_str())
+        .map(str::to_ascii_lowercase);
+    if !ext.is_some_and(|e| REFERENCE_EXTS.contains(&e.as_str())) {
+        return Err(format!("{path}: not a .bib, .json, .yaml or .yml file"));
+    }
+    Ok(document_dir.join(relative))
 }
 
 fn summarize_items(items: &[Item]) -> References {
@@ -282,6 +311,27 @@ mod tests {
         assert_eq!(bibliography_paths(""), Ok(vec![]));
         assert_eq!(bibliography_paths("- not a header\n"), Ok(vec![]));
         assert!(bibliography_paths("bibliography: [\n").is_err());
+    }
+
+    #[test]
+    fn a_bibliography_file_stays_in_the_document_folder_with_a_known_format() {
+        let dir = Path::new("/docs/paper");
+        let file = |path: &str| bibliography_file(dir, path);
+        assert_eq!(file("refs.bib"), Ok(PathBuf::from("/docs/paper/refs.bib")));
+        assert_eq!(
+            file("lib/Zotero.JSON"),
+            Ok(PathBuf::from("/docs/paper/lib/Zotero.JSON"))
+        );
+        let outside = "only a file in the document's folder is read";
+        assert!(file("/etc/passwd.bib").unwrap_err().ends_with(outside));
+        assert!(file("../shared/refs.bib").unwrap_err().ends_with(outside));
+        assert!(file("https://example.org/refs.bib")
+            .unwrap_err()
+            .ends_with(outside));
+        assert!(file("notes.txt")
+            .unwrap_err()
+            .ends_with("not a .bib, .json, .yaml or .yml file"));
+        assert!(file("refs").is_err());
     }
 
     #[test]
