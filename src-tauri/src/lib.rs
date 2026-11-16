@@ -12,7 +12,7 @@ mod filewatch;
 pub mod pdfimport;
 pub mod references;
 
-use filewatch::FileWatches;
+use filewatch::{FileWatches, ReferenceWatches};
 
 /// The file path Monoleaf was asked to open — from being launched with a `.md`
 /// argument (double-clicking an associated file on Windows/Linux), or from the
@@ -598,6 +598,8 @@ fn set_allow_network_paths(app: AppHandle, allow: bool) {
     if !allow {
         app.state::<FileWatches>()
             .retain(|path| validate_path(path, false).is_ok());
+        app.state::<ReferenceWatches>()
+            .retain(|path| validate_path(path, false).is_ok());
     }
 }
 
@@ -652,6 +654,50 @@ fn watch_file(
         .unwrap_or_else(|e| e.into_inner())
         .insert(label, watch);
     drop(replaced);
+    Ok(())
+}
+
+/// Watch the `bibliography:` files the header of the window's document names,
+/// so that a change to one of them reaches the editor's reference list. The
+/// paths are resolved with the rules that reading applies; a path those rules
+/// refuse is skipped here, since its warning came with the load. On the main
+/// thread for the same reason as `watch_file`.
+#[tauri::command]
+fn watch_references(
+    window: tauri::WebviewWindow,
+    state: tauri::State<ReferenceWatches>,
+    document_path: Option<String>,
+    front_matter: String,
+) -> Result<(), String> {
+    let label = window.label().to_string();
+    let dir = document_path
+        .as_deref()
+        .map(std::path::Path::new)
+        .and_then(std::path::Path::parent);
+    let mut watches = Vec::new();
+    for path in references::bibliography_paths(&front_matter).unwrap_or_default() {
+        let Some(file) = dir.and_then(|dir| references::bibliography_file(dir, &path).ok()) else {
+            continue;
+        };
+        let file = file.to_string_lossy().into_owned();
+        if validate_path(&file, ALLOW_NETWORK_PATHS.load(Ordering::Relaxed)).is_err() {
+            continue;
+        }
+        let app = window.app_handle().clone();
+        let target = label.clone();
+        let watch = filewatch::start(&file, move |kind| {
+            let _ = app.emit_to(
+                target.as_str(),
+                filewatch::REFERENCES_CHANGED_EVENT,
+                filewatch::FileChange {
+                    path: path.clone(),
+                    kind,
+                },
+            );
+        });
+        watches.extend(watch.ok());
+    }
+    state.replace(&label, watches);
     Ok(())
 }
 
@@ -1615,6 +1661,7 @@ pub fn run() {
         .manage(PendingUpdate(Mutex::new(None)))
         .manage(FlushGate::new())
         .manage(FileWatches::default())
+        .manage(ReferenceWatches::default())
         .invoke_handler(tauri::generate_handler![
             read_file,
             write_file,
@@ -1623,6 +1670,7 @@ pub fn run() {
             load_references,
             set_allow_network_paths,
             watch_file,
+            watch_references,
             import_pdf_as_markdown,
             spell_suggest,
             spell_check,
@@ -1644,6 +1692,9 @@ pub fn run() {
         .on_window_event(|window, event| {
             if let tauri::WindowEvent::Destroyed = event {
                 window.state::<FileWatches>().stop(window.label());
+                window
+                    .state::<ReferenceWatches>()
+                    .replace(window.label(), Vec::new());
             }
         })
         // On Windows the OS foreground-lock policy can let the config-defined
