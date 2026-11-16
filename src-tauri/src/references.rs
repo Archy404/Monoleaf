@@ -3,7 +3,7 @@
 //! The editor offers them after `@` and shows one on hover, so what leaves
 //! this module is a short summary per entry, the same for every source format.
 
-use hayagriva::citationberg::json::{Item, NameValue, Value};
+use hayagriva::citationberg::json::{FixedDateRange, Item, NameValue, Value};
 
 /// One reference, as the editor lists it.
 #[derive(Clone, Debug, PartialEq, Eq, serde::Serialize)]
@@ -94,7 +94,7 @@ fn summarize_item(id: &str, item: &Item) -> ReferenceSummary {
     ReferenceSummary {
         key: id.to_string(),
         authors,
-        year: None,
+        year: item.0.get("issued").and_then(year_of),
         title: title.unwrap_or_default().into_owned(),
     }
 }
@@ -111,6 +111,17 @@ fn name_first(name: &NameValue) -> String {
                 .map_or(family.clone(), |given| format!("{family}, {given}"))
         }
     }
+}
+
+/// CSL allows a date as a bare year, as text ("2019-07") or as date parts.
+fn year_of(issued: &Value) -> Option<i32> {
+    let range = match issued {
+        Value::Number(year) => return i32::try_from(*year).ok(),
+        Value::String(text) => text.parse::<FixedDateRange>().ok()?,
+        Value::Date(date) => FixedDateRange::try_from(date.clone()).ok()?,
+        Value::Names(_) => return None,
+    };
+    Some(range.start.year.into())
 }
 
 /// The parser reports a byte position; a line number is what finds the spot.
@@ -182,6 +193,8 @@ mod tests {
           {"title": "No id"}
         ]"#;
         let References { entries, warnings } = references_from_csl_json(json).unwrap();
+        let years: Vec<Option<i32>> = entries.iter().map(|e| e.year).collect();
+        assert_eq!(years, [Some(2020), Some(2019), Some(2018)]);
         assert_eq!(entries[0].authors, ["Doe, Jane", "van der Roe, Richard"]);
         assert_eq!(entries[1].authors, ["Copernicus Climate Change Service"]);
         assert_eq!(entries[1].title, "ERA5-Land");
