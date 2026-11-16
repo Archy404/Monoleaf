@@ -266,10 +266,11 @@ pub fn read_bibliography(
 }
 
 /// One place the header named and how many entries it gave; a source that
-/// could not be read gives none, and its warning says why.
+/// could not be read gives none, and its warning says why. Every warning
+/// starts with the source's name, so the editor can group them.
 #[derive(Clone, Debug, PartialEq, Eq, serde::Serialize)]
 pub struct Source {
-    /// `references:` for the inline list, else the path as written.
+    /// `header` for the inline list, else the path as written.
     pub name: String,
     pub entries: usize,
 }
@@ -290,8 +291,10 @@ impl Loaded {
             Ok(found) => {
                 entries = found.entries.len();
                 self.entries.extend(found.entries);
-                self.warnings.extend(found.warnings);
+                let named = found.warnings.iter().map(|w| format!("{name}: {w}"));
+                self.warnings.extend(named);
             }
+            // Already named: a read refuses with the path in front.
             Err(problem) => self.warnings.push(problem),
         }
         self.sources.push(Source {
@@ -319,7 +322,7 @@ pub fn load(document_path: Option<&str>, front_matter: &str, allow_network: bool
         .lines()
         .any(|line| line.starts_with("references:"))
     {
-        loaded.add("references:", Ok(inline));
+        loaded.add("header", Ok(inline));
     }
     let dir = document_path.map(Path::new).and_then(Path::parent);
     for path in bibliography_paths(front_matter).unwrap_or_default() {
@@ -569,14 +572,20 @@ mod tests {
         fs::create_dir_all(&dir).unwrap();
         fs::write(dir.join("refs.bib"), SAMPLE).unwrap();
         let doc = dir.join("paper.md");
-        let header = "bibliography:\n- refs.bib\n- missing.bib\nreferences:\n- id: inline\n  title: Inline\n";
+        let header = "bibliography:\n- refs.bib\n- missing.bib\nreferences:\n- id: inline\n  title: Inline\n- title: No id\n";
         let found = load(doc.to_str(), header, false);
         let keys: Vec<&str> = found.entries.iter().map(|e| e.key.as_str()).collect();
         assert_eq!(
             keys,
             ["inline", "doe2020", "ERA5LandHourlyData2019", "bare"]
         );
-        assert_eq!(found.warnings, ["missing.bib: not found"]);
+        assert_eq!(
+            found.warnings,
+            [
+                "header: entry 2 skipped, it has no id",
+                "missing.bib: not found"
+            ]
+        );
         let sources: Vec<(&str, usize)> = found
             .sources
             .iter()
@@ -584,11 +593,11 @@ mod tests {
             .collect();
         assert_eq!(
             sources,
-            [("references:", 1), ("refs.bib", 3), ("missing.bib", 0)]
+            [("header", 1), ("refs.bib", 3), ("missing.bib", 0)]
         );
         let unsaved = load(None, header, false);
         assert_eq!(unsaved.entries.len(), 1);
-        assert!(unsaved.warnings[0].starts_with("refs.bib: save the document first"));
+        assert!(unsaved.warnings[1].starts_with("refs.bib: save the document first"));
         assert!(load(None, "references: [\n", false).warnings[0].starts_with("header: "));
         let _ = fs::remove_dir_all(&dir);
     }
