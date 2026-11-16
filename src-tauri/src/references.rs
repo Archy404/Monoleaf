@@ -139,6 +139,39 @@ pub fn bibliography_file(document_dir: &Path, path: &str) -> Result<PathBuf, Str
     Ok(document_dir.join(relative))
 }
 
+/// The largest reference file that is read. A library export of thousands of
+/// entries is a few megabytes; the whole file is held in memory while read.
+const BIBLIOGRAPHY_MAX_BYTES: u64 = 10 * 1024 * 1024;
+
+/// The entries of one `bibliography:` file of the document in `document_dir`.
+/// `allow_network` is the user's setting for network paths, see validate_path.
+pub fn read_bibliography(
+    document_dir: &Path,
+    path: &str,
+    allow_network: bool,
+) -> Result<References, String> {
+    let file = bibliography_file(document_dir, path)?;
+    let file_str = file.to_string_lossy();
+    crate::validate_path(&file_str, allow_network)?;
+    let bytes = crate::read_capped(&file_str, BIBLIOGRAPHY_MAX_BYTES)
+        .map_err(|e| match e.kind() {
+            std::io::ErrorKind::NotFound => format!("{path}: not found"),
+            _ => format!("{path}: {e}"),
+        })?
+        .ok_or_else(|| format!("{path}: larger than {} MB", BIBLIOGRAPHY_MAX_BYTES >> 20))?;
+    let text = String::from_utf8(bytes).map_err(|_| format!("{path}: not UTF-8 text"))?;
+    match file
+        .extension()
+        .and_then(|e| e.to_str())
+        .map(str::to_ascii_lowercase)
+    {
+        Some(ext) if ext == "bib" => references_from_biblatex(&text),
+        Some(ext) if ext == "json" => references_from_csl_json(&text),
+        _ => references_from_csl_yaml(&text),
+    }
+    .map_err(|e| format!("{path}: {e}"))
+}
+
 fn summarize_items(items: &[Item]) -> References {
     let mut references = References::default();
     for (index, item) in items.iter().enumerate() {
@@ -201,6 +234,7 @@ fn line_of(position: usize, text: &str) -> usize {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::fs;
 
     const SAMPLE: &str = r#"@article{doe2020,
   author = {Doe, Jane and van der Roe, Richard},
@@ -332,6 +366,30 @@ mod tests {
             .unwrap_err()
             .ends_with("not a .bib, .json, .yaml or .yml file"));
         assert!(file("refs").is_err());
+    }
+
+    #[test]
+    fn a_bibliography_file_is_read_by_its_format_from_inside_the_folder() {
+        let dir = std::env::temp_dir().join(format!("monoleaf_refs-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(dir.join("lib")).unwrap();
+        fs::write(dir.join("lib/refs.bib"), SAMPLE).unwrap();
+        fs::write(
+            dir.join("refs.json"),
+            r#"[{"id": "j", "title": "From JSON"}]"#,
+        )
+        .unwrap();
+        fs::write(
+            dir.join("refs.yml"),
+            "references:\n- id: y\n  title: From YAML\n",
+        )
+        .unwrap();
+        let read = |path: &str| read_bibliography(&dir, path, false);
+        assert_eq!(read("lib/refs.bib").unwrap().entries.len(), 3);
+        assert_eq!(read("refs.json").unwrap().entries[0].title, "From JSON");
+        assert_eq!(read("refs.yml").unwrap().entries[0].key, "y");
+        assert_eq!(read("missing.bib"), Err("missing.bib: not found".into()));
+        let _ = fs::remove_dir_all(&dir);
     }
 
     #[test]
