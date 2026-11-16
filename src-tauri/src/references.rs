@@ -3,6 +3,8 @@
 //! The editor offers them after `@` and shows one on hover, so what leaves
 //! this module is a short summary per entry, the same for every source format.
 
+use hayagriva::citationberg::json::{Item, NameValue, Value};
+
 /// One reference, as the editor lists it.
 #[derive(Clone, Debug, PartialEq, Eq, serde::Serialize)]
 pub struct ReferenceSummary {
@@ -67,6 +69,50 @@ fn summarize(entry: &hayagriva::Entry) -> ReferenceSummary {
     }
 }
 
+/// The entries of CSL-JSON text, the list of items a reference manager exports.
+pub fn references_from_csl_json(text: &str) -> Result<References, String> {
+    let items: Vec<Item> = serde_json::from_str(text).map_err(|e| e.to_string())?;
+    let mut references = References::default();
+    for (index, item) in items.iter().enumerate() {
+        // Without an `id` there is nothing to write after `@`.
+        match item.id() {
+            Some(id) => references.entries.push(summarize_item(&id, item)),
+            None => references
+                .warnings
+                .push(format!("entry {} skipped, it has no id", index + 1)),
+        }
+    }
+    Ok(references)
+}
+
+fn summarize_item(id: &str, item: &Item) -> ReferenceSummary {
+    let authors = match item.0.get("author") {
+        Some(Value::Names(names)) => names.iter().map(name_first).collect(),
+        _ => Vec::new(),
+    };
+    let title = item.0.get("title").and_then(Value::to_str);
+    ReferenceSummary {
+        key: id.to_string(),
+        authors,
+        year: None,
+        title: title.unwrap_or_default().into_owned(),
+    }
+}
+
+/// Family name first, as for a `.bib` entry.
+fn name_first(name: &NameValue) -> String {
+    match name {
+        NameValue::Literal(name) => name.literal.clone(),
+        NameValue::Item(name) => {
+            let particle = name.non_dropping_particle.as_deref();
+            let family = particle.map_or(name.family.clone(), |p| format!("{p} {}", name.family));
+            name.given
+                .as_ref()
+                .map_or(family.clone(), |given| format!("{family}, {given}"))
+        }
+    }
+}
+
 /// The parser reports a byte position; a line number is what finds the spot.
 fn line_of(position: usize, text: &str) -> usize {
     let before = &text.as_bytes()[..position.min(text.len())];
@@ -122,6 +168,26 @@ mod tests {
             found.warnings,
             ["line 16: entry odd skipped, wrong number of digits"]
         );
+    }
+
+    #[test]
+    fn csl_json_items_give_the_same_summary_as_bib_entries() {
+        let json = r#"[
+          {"id": "doe2020", "title": "A study", "issued": {"date-parts": [[2020, 3]]},
+           "author": [{"family": "Doe", "given": "Jane"},
+                      {"family": "Roe", "given": "Richard", "non-dropping-particle": "van der"}]},
+          {"id": "era5", "title": "ERA5-Land", "issued": 2019,
+           "author": [{"literal": "Copernicus Climate Change Service"}]},
+          {"id": "text", "issued": "2018-07"},
+          {"title": "No id"}
+        ]"#;
+        let References { entries, warnings } = references_from_csl_json(json).unwrap();
+        assert_eq!(entries[0].authors, ["Doe, Jane", "van der Roe, Richard"]);
+        assert_eq!(entries[1].authors, ["Copernicus Climate Change Service"]);
+        assert_eq!(entries[1].title, "ERA5-Land");
+        assert_eq!(warnings, ["entry 4 skipped, it has no id"]);
+        let broken = references_from_csl_json("[{").unwrap_err();
+        assert!(broken.contains("line 1"));
     }
 
     #[test]
