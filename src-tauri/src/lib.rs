@@ -975,6 +975,26 @@ fn find_images_named(dir: &str, name: &str) -> Result<Vec<String>, String> {
     Ok(Vec::new())
 }
 
+/// The references the document's header names, for `@` completion and the
+/// hover. A problem with a file comes back as a warning inside the result,
+/// never as an error, so the editor keeps what could be read. Off the main
+/// thread like the other file reads: a `.bib` on a slow disk must not freeze
+/// the window.
+#[tauri::command]
+async fn load_references(
+    document_path: Option<String>,
+    front_matter: String,
+) -> Result<references::References, String> {
+    off_main_thread(move || {
+        Ok(references::load(
+            document_path.as_deref(),
+            &front_matter,
+            ALLOW_NETWORK_PATHS.load(Ordering::Relaxed),
+        ))
+    })
+    .await
+}
+
 /// Convert a PDF to Markdown for opening as a new, unsaved document.
 ///
 /// Unlike `read_file` this is not a passthrough: there is no lossless round trip
@@ -1600,6 +1620,7 @@ pub fn run() {
             write_file,
             read_image_as_data_url,
             find_image_by_name,
+            load_references,
             set_allow_network_paths,
             watch_file,
             import_pdf_as_markdown,
