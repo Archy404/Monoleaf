@@ -54,7 +54,7 @@ import {
 } from "./document";
 import { citationCompletion, citationHover } from "./citations";
 import { applyMeta, parseMeta, type DocMeta, type MetaFormat } from "./meta";
-import { syncReferences } from "./references";
+import { forgetLoadedReferences, syncReferences } from "./references";
 import { PortabilityMode, portabilityExtensions } from "./portability";
 import { livePreviewExtensions } from "./livepreview";
 import { imageReferenceAt, type ImageReference } from "./imageref";
@@ -485,6 +485,13 @@ function setupRecoveryFlush() {
  */
 const FILE_CHANGED_EVENT = "file-changed-on-disk";
 
+/**
+ * Rust's name for "a reference file of your document changed on disk".
+ *
+ * COUPLED: `REFERENCES_CHANGED_EVENT` in src-tauri/src/filewatch.rs.
+ */
+const REFERENCES_CHANGED_EVENT = "references-changed-on-disk";
+
 /** The payload of FILE_CHANGED_EVENT (filewatch::FileChange in Rust). */
 interface FileChange {
   path: string;
@@ -684,6 +691,20 @@ function setupFileWatch() {
     .catch(() => {
       console.error(
         `Monoleaf: could not listen for ${FILE_CHANGED_EVENT}; external edits will not be noticed.`,
+      );
+    });
+}
+
+/** A changed reference file: load the list again, after the usual pause. */
+function setupReferenceWatch() {
+  void thisWindow
+    .listen(REFERENCES_CHANGED_EVENT, () => {
+      forgetLoadedReferences();
+      scheduleReferencesSync();
+    })
+    .catch(() => {
+      console.error(
+        `Monoleaf: could not listen for ${REFERENCES_CHANGED_EVENT}; edits to reference files will not be noticed.`,
       );
     });
 }
@@ -4249,6 +4270,7 @@ localizeShortcutLabels(); // ⌘ labels on macOS; no-op elsewhere
 setupCloseGuard();
 // Before the startup chain, which is what opens a file and starts its watch.
 setupFileWatch();
+setupReferenceWatch();
 applyViewClass();
 applyZoom();
 refreshTitle();
