@@ -5,6 +5,15 @@
  * hover; nothing is rendered here.
  */
 
+import {
+  autocompletion,
+  type Completion,
+  type CompletionContext,
+  type CompletionResult,
+} from "@codemirror/autocomplete";
+import type { Extension } from "@codemirror/state";
+import { currentReferences, type References } from "./references";
+
 /** A citation around a position: `from` is the `@`, `to` the end of the key. */
 export interface Citation {
   from: number;
@@ -36,4 +45,45 @@ export function citationAt(text: string, pos: number): Citation | null {
   if (end === start && start < text.length && KEY_CHAR.test(text[start]))
     return null;
   return { from: at, to: end, key: text.slice(start, end) };
+}
+
+/**
+ * The completions for the citation at the cursor: every reference whose key,
+ * author or title contains what was typed after the `@`. The list is filtered
+ * here rather than by the editor, which only matches the key.
+ */
+export function citationCompletions(
+  context: CompletionContext,
+  references: () => References = currentReferences,
+): CompletionResult | null {
+  const line = context.state.doc.lineAt(context.pos);
+  const citation = citationAt(line.text, context.pos - line.from);
+  if (citation === null) return null;
+  const typed = line.text.slice(citation.from + 1, context.pos - line.from);
+  const needle = typed.toLowerCase();
+  const options: Completion[] = [];
+  for (const entry of references().entries) {
+    const haystack = [entry.key, ...entry.authors, entry.title].join(" ");
+    if (!haystack.toLowerCase().includes(needle)) continue;
+    const who = entry.authors[0] ?? "";
+    const when = entry.year === null ? "" : String(entry.year);
+    options.push({
+      label: entry.key,
+      detail: [who, when].filter((part) => part !== "").join(", "),
+      info: entry.title,
+      type: "text",
+    });
+  }
+  if (options.length === 0) return null;
+  return {
+    from: line.from + citation.from + 1,
+    to: line.from + citation.to,
+    options,
+    filter: false,
+  };
+}
+
+/** `@` opens the citation list, with no icons: every entry is a reference. */
+export function citationCompletion(): Extension {
+  return autocompletion({ override: [citationCompletions], icons: false });
 }
