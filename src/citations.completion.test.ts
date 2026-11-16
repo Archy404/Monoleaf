@@ -14,6 +14,7 @@ const references = () => ({
     },
   ],
   warnings: [],
+  sources: [],
 });
 
 // The completions for `text` with the cursor at its end.

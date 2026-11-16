@@ -14,6 +14,7 @@ import {
 const found = {
   entries: [{ key: "doe", authors: [], year: null, title: "" }],
   warnings: [],
+  sources: [{ name: "refs.bib", entries: 1 }],
 };
 const withBib = "---\ntitle: T\nbibliography: refs.bib\n---\n\nbody\n";
 const calls = (command: string) =>
@@ -27,14 +28,11 @@ describe("syncReferences", () => {
   });
 
   it("never asks the backend for a document without reference keys", async () => {
-    expect(await syncReferences(null, "# No header\n")).toEqual({
-      entries: [],
-      warnings: [],
-    });
-    expect(await syncReferences("/d/a.md", "---\ntitle: T\n---\n")).toEqual({
-      entries: [],
-      warnings: [],
-    });
+    const none = { entries: [], warnings: [], sources: [] };
+    expect(await syncReferences(null, "# No header\n")).toEqual(none);
+    expect(await syncReferences("/d/a.md", "---\ntitle: T\n---\n")).toEqual(
+      none,
+    );
     expect(calls("load_references")).toHaveLength(0);
   });
 
@@ -94,6 +92,7 @@ describe("syncReferences", () => {
     expect(await syncReferences("/d/a.md", withBib)).toEqual({
       entries: [],
       warnings: ["references: Error: no backend"],
+      sources: [],
     });
   });
 });

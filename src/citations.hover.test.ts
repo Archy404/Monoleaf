@@ -13,6 +13,7 @@ const references = () => ({
     { key: "bare", authors: [], year: null, title: "" },
   ],
   warnings: [],
+  sources: [],
 });
 
 describe("citationHoverAt", () => {

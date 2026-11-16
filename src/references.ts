@@ -8,7 +8,7 @@
 import { invoke } from "@tauri-apps/api/core";
 import { frontMatter } from "./meta";
 
-/** COUPLED: `ReferenceSummary` and `References` in src-tauri/src/references.rs. */
+/** COUPLED: `ReferenceSummary`, `Source` and `Loaded` in src-tauri/src/references.rs. */
 export interface ReferenceSummary {
   key: string;
   authors: string[];
@@ -16,14 +16,22 @@ export interface ReferenceSummary {
   title: string;
 }
 
+/** Where entries came from: `references:` for the inline list, else the
+ * path as written in the header; zero entries where the source failed. */
+export interface Source {
+  name: string;
+  entries: number;
+}
+
 export interface References {
   entries: ReferenceSummary[];
   warnings: string[];
+  sources: Source[];
 }
 
 type Loader = (path: string | null, header: string) => Promise<References>;
 
-const NONE: References = { entries: [], warnings: [] };
+const NONE: References = { entries: [], warnings: [], sources: [] };
 // The header keys that name references, at column 0 as pandoc reads them.
 const NAMES_REFERENCES = /^(?:bibliography|references)\s*:/m;
 
@@ -70,6 +78,7 @@ export async function syncReferences(
   const loaded = await load(path, header).catch((e: unknown) => ({
     entries: [],
     warnings: [`references: ${String(e)}`],
+    sources: [],
   }));
   // A newer header or document overtook this load; its result is stale.
   if (path !== loadedPath || header !== loadedHeader) return current;
