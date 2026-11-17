@@ -4,7 +4,7 @@
 //! of the bundled Citation Style Language styles, `lang:` picks the locale.
 //! Custom style files are not read; a style name is all the header can give.
 
-use crate::references::Reference;
+use crate::references::{self, Reference};
 use hayagriva::archive::{locales, ArchivedStyle};
 use hayagriva::citationberg::taxonomy::Locator;
 use hayagriva::citationberg::{IndependentStyle, LocaleCode, Style};
@@ -205,6 +205,30 @@ pub fn render(
     out
 }
 
+/// A string the header gives under `key`, `csl: apa`; absent or no string
+/// gives `None`.
+fn header_string(front_matter: &str, key: &str) -> Option<String> {
+    let document: yaml_serde::Value = yaml_serde::from_str(front_matter).ok()?;
+    document.get(key)?.as_str().map(str::to_string)
+}
+
+/// The export's one call: reads the references the header names, takes the
+/// style and the locale from the header, and renders. The loader's warnings
+/// come first in the result, each named after its source.
+pub fn render_document(
+    document_path: Option<&str>,
+    front_matter: &str,
+    allow_network: bool,
+    citations: &[Citation],
+) -> Result<RenderedCitations, String> {
+    let style = style_named(header_string(front_matter, "csl").as_deref())?;
+    let locale = locale_named(header_string(front_matter, "lang").as_deref());
+    let loaded = references::load_references(document_path, front_matter, allow_network);
+    let mut out = render(&loaded.references, &style, &locale, citations);
+    out.warnings.splice(0..0, loaded.warnings);
+    Ok(out)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -303,5 +327,20 @@ mod tests {
         assert_eq!(labels, [Some("[1]"), Some("[2]")]);
         assert_eq!(out.warnings.len(), 3, "{:?}", out.warnings);
         assert!(out.warnings[0].contains("citation 3:") && out.warnings[1].contains("nobody"));
+    }
+
+    #[test]
+    fn a_document_renders_from_its_header_alone() {
+        let header = format!("csl: apa\nlang: en-US\n{ISSUE_EXAMPLE}bibliography: gone.bib\n");
+        let cited = [cite(&["ERA5LandHourlyData2019"])];
+        let document = std::env::temp_dir().join("paper.md");
+        let out = render_document(document.to_str(), &header, false, &cited).unwrap();
+        assert_eq!(
+            out.citations[0].as_deref(),
+            Some("(Copernicus Climate Change Service, 2019)")
+        );
+        assert_eq!(out.warnings, ["gone.bib: not found"]);
+        let err = render_document(None, "csl: nope\n", false, &cited).unwrap_err();
+        assert!(err.starts_with("unknown citation style"));
     }
 }
