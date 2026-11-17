@@ -214,7 +214,7 @@ mod tests {
                        journal={J. Stud.}, year={2020}, volume={3}, pages={1--9}}";
     const ISSUE_EXAMPLE: &str = "references:\n- id: ERA5LandHourlyData2019\n  type: dataset\n  \
                                  title: ERA5-Land hourly data from 1950 to present\n  author:\n  \
-                                 - literal: Copernicus Climate Change Service\n  issued: {date-parts: [[2019]]}\n";
+                                 - literal: Copernicus Climate Change Service\n  issued: 2019\n";
 
     fn cite(keys: &[&str]) -> Citation {
         let items = keys.iter().map(|key| CitedItem {

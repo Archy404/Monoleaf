@@ -3,7 +3,7 @@
 //! The editor offers them after `@` and shows one on hover, so what leaves
 //! this module is a short summary per entry, the same for every source format.
 
-use hayagriva::citationberg::json::{FixedDateRange, Item, NameValue, Value};
+use hayagriva::citationberg::json::{DateValue, FixedDateRange, Item, NameValue, Value};
 use std::collections::HashSet;
 use std::fs;
 use std::path::{Component, Path, PathBuf};
@@ -423,7 +423,8 @@ pub fn load_references(
 
 fn collect_items(items: Vec<Item>) -> Read {
     let mut found = Read::default();
-    for (index, item) in items.into_iter().enumerate() {
+    for (index, mut item) in items.into_iter().enumerate() {
+        normalise_dates(&mut item, index, &mut found.warnings);
         // Without an `id` there is nothing to write after `@`.
         if item.id().is_some() {
             found.references.push(Reference::Csl(item));
@@ -464,14 +465,61 @@ fn name_first(name: &NameValue) -> String {
 }
 
 /// CSL allows a date as a bare year, as text ("2019-07") or as date parts.
+/// The date variables of CSL.
+const DATE_VARIABLES: [&str; 6] = [
+    "accessed",
+    "available-date",
+    "event-date",
+    "issued",
+    "original-date",
+    "submitted",
+];
+
+/// hayagriva reads a date only in the CSL form, `{date-parts: [[2019]]}` or
+/// a date string, and panics on a range. The bare `issued: 2019` pandoc takes
+/// becomes that form; a range keeps its start. What is no date stays as it
+/// is, with a warning, and renders as "n.d.".
+fn normalise_dates(item: &mut Item, index: usize, warnings: &mut Vec<String>) {
+    for name in DATE_VARIABLES {
+        let Some(value) = item.0.get_mut(name) else {
+            continue;
+        };
+        let range = match value {
+            Value::Number(year) => year.to_string().parse::<FixedDateRange>().ok(),
+            Value::String(text) => text.parse::<FixedDateRange>().ok(),
+            Value::Date(date) => FixedDateRange::try_from(date.clone()).ok(),
+            Value::Names(_) => None,
+        };
+        let Some(mut range) = range else {
+            warnings.push(format!("entry {}: {name} is not a date", index + 1));
+            continue;
+        };
+        if range.end.take().is_some() {
+            let note = format!(
+                "entry {}: {name} is a range, only its start is used",
+                index + 1
+            );
+            warnings.push(note);
+        }
+        *value = Value::Date(DateValue::Raw {
+            raw: range,
+            literal: None,
+            season: None,
+        });
+    }
+}
+
 fn year_of(issued: &Value) -> Option<i32> {
-    let range = match issued {
-        Value::Number(year) => return i32::try_from(*year).ok(),
-        Value::String(text) => text.parse::<FixedDateRange>().ok()?,
-        Value::Date(date) => FixedDateRange::try_from(date.clone()).ok()?,
-        Value::Names(_) => return None,
-    };
-    Some(range.start.year.into())
+    match issued {
+        Value::Date(date) => Some(
+            FixedDateRange::try_from(date.clone())
+                .ok()?
+                .start
+                .year
+                .into(),
+        ),
+        _ => None,
+    }
 }
 
 /// The parser reports a byte position; a line number is what finds the spot.
@@ -719,6 +767,27 @@ mod tests {
         assert_eq!(
             references_from_biblatex("no entries here\n"),
             References::default()
+        );
+    }
+
+    #[test]
+    fn item_dates_take_the_csl_form_and_a_range_keeps_its_start() {
+        let text = "references:\n- id: a\n  issued: 2019\n- id: b\n  issued: 2019/2021\n\
+                    - id: c\n  issued: soon\n";
+        let read = read_csl_yaml(text).unwrap();
+        let issued = |n: usize| match &read.references[n] {
+            Reference::Csl(item) => item.0.get("issued").cloned(),
+            Reference::Bib(_) => None,
+        };
+        assert!(matches!(issued(0), Some(Value::Date(_))));
+        assert_eq!(year_of(&issued(1).unwrap()), Some(2019));
+        assert_eq!(issued(2), Some(Value::String("soon".into())));
+        assert_eq!(
+            read.warnings,
+            [
+                "entry 2: issued is a range, only its start is used",
+                "entry 3: issued is not a date"
+            ]
         );
     }
 }
