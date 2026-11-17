@@ -1,0 +1,25 @@
+{
+  "citations": [
+    "[2]",
+    "[1]",
+    null
+  ],
+  "bibliography": [
+    {
+      "key": "doe2020",
+      "label": "[1]",
+      "html": "J. Doe and R. Roe, “A Study of Reference Lists,” <span style=\"font-style: italic;\">Journal of Studies</span>, vol. 3, no. 2, pp. 1–9, 2020, doi: <a href=\"https://doi.org/10.1000/jos.2020.3\">10.1000/jos.2020.3</a>."
+    },
+    {
+      "key": "ERA5LandHourlyData2019",
+      "label": "[2]",
+      "html": "Copernicus Climate Change Service, “ERA5-Land hourly data from 1950 to present.” 2019."
+    }
+  ],
+  "hangingIndent": false,
+  "title": null,
+  "warnings": [
+    "citation 3: a .bib and a CSL reference in one citation cannot be rendered together",
+    "the document cites .bib and CSL references: each format is numbered and listed on its own, and two works that cite alike are not told apart"
+  ]
+}
