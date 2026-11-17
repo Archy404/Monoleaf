@@ -288,7 +288,7 @@ pub fn read_bibliography(
     document_dir: &Path,
     path: &str,
     allow_network: bool,
-) -> Result<References, String> {
+) -> Result<Read, String> {
     let file = bibliography_file(document_dir, path)?;
     let file_str = file.to_string_lossy();
     crate::validate_path(&file_str, allow_network)?;
@@ -313,9 +313,9 @@ pub fn read_bibliography(
         .and_then(|e| e.to_str())
         .map(str::to_ascii_lowercase)
     {
-        Some(ext) if ext == "bib" => Ok(references_from_biblatex(&text)),
-        Some(ext) if ext == "json" => references_from_csl_json(&text),
-        _ => references_from_csl_yaml(&text),
+        Some(ext) if ext == "bib" => Ok(read_biblatex(&text)),
+        Some(ext) if ext == "json" => read_csl_json(&text),
+        _ => read_csl_yaml(&text),
     }
     .map_err(|e| format!("{path}: {e}"))
 }
@@ -333,19 +333,27 @@ pub struct Source {
 /// What the editor gets for a document: every entry, every warning, and the
 /// sources in header order.
 #[derive(Clone, Debug, Default, PartialEq, Eq, serde::Serialize)]
-pub struct Loaded {
+pub struct LoadedSummaries {
     pub entries: Vec<ReferenceSummary>,
     pub warnings: Vec<String>,
     pub sources: Vec<Source>,
 }
 
-impl Loaded {
-    fn add(&mut self, name: &str, result: Result<References, String>) {
+/// The same with the references in full, as rendering needs them.
+#[derive(Default)]
+pub struct LoadedReferences {
+    pub references: Vec<Reference>,
+    pub warnings: Vec<String>,
+    pub sources: Vec<Source>,
+}
+
+impl LoadedReferences {
+    fn add(&mut self, name: &str, result: Result<Read, String>) {
         let mut entries = 0;
         match result {
             Ok(found) => {
-                entries = found.entries.len();
-                self.entries.extend(found.entries);
+                entries = found.references.len();
+                self.references.extend(found.references);
                 let named = found.warnings.iter().map(|w| format!("{name}: {w}"));
                 self.warnings.extend(named);
             }
@@ -357,6 +365,15 @@ impl Loaded {
             entries,
         });
     }
+
+    /// The editor's view of it: summaries only.
+    pub fn summaries(self) -> LoadedSummaries {
+        LoadedSummaries {
+            entries: self.references.iter().map(Reference::summary).collect(),
+            warnings: self.warnings,
+            sources: self.sources,
+        }
+    }
 }
 
 /// Everything the header of the document at `document_path` names: the
@@ -364,9 +381,21 @@ impl Loaded {
 /// order. A file that cannot be read becomes a warning, so the editor keeps
 /// what the other sources gave. An unsaved document has no folder for the
 /// files to be relative to, so they wait until it is saved.
-pub fn load(document_path: Option<&str>, front_matter: &str, allow_network: bool) -> Loaded {
-    let mut loaded = Loaded::default();
-    let inline = match references_from_csl_yaml(front_matter) {
+pub fn load_summaries(
+    document_path: Option<&str>,
+    front_matter: &str,
+    allow_network: bool,
+) -> LoadedSummaries {
+    load_references(document_path, front_matter, allow_network).summaries()
+}
+
+pub fn load_references(
+    document_path: Option<&str>,
+    front_matter: &str,
+    allow_network: bool,
+) -> LoadedReferences {
+    let mut loaded = LoadedReferences::default();
+    let inline = match read_csl_yaml(front_matter) {
         Ok(inline) => inline,
         Err(problem) => {
             loaded.warnings.push(format!("header: {problem}"));
@@ -604,10 +633,11 @@ mod tests {
         )
         .unwrap();
         let read = |path: &str| read_bibliography(&dir, path, false);
-        assert_eq!(read("lib/refs.bib").unwrap().entries.len(), 3);
-        assert_eq!(read("refs.json").unwrap().entries[0].title, "From JSON");
-        assert_eq!(read("refs.yml").unwrap().entries[0].key, "y");
-        assert_eq!(read("missing.bib"), Err("missing.bib: not found".into()));
+        let summary = |path: &str| read(path).unwrap().summaries().entries;
+        assert_eq!(summary("lib/refs.bib").len(), 3);
+        assert_eq!(summary("refs.json")[0].title, "From JSON");
+        assert_eq!(summary("refs.yml")[0].key, "y");
+        assert_eq!(read("missing.bib").unwrap_err(), "missing.bib: not found");
         #[cfg(unix)]
         {
             // A link that leads out of the folder is refused like `..`.
@@ -628,7 +658,7 @@ mod tests {
         fs::write(dir.join("refs.bib"), SAMPLE).unwrap();
         let doc = dir.join("paper.md");
         let header = "bibliography:\n- refs.bib\n- missing.bib\nreferences:\n- id: inline\n  title: Inline\n- title: No id\n";
-        let found = load(doc.to_str(), header, false);
+        let found = load_summaries(doc.to_str(), header, false);
         let keys: Vec<&str> = found.entries.iter().map(|e| e.key.as_str()).collect();
         assert_eq!(
             keys,
@@ -650,10 +680,10 @@ mod tests {
             sources,
             [("header", 1), ("refs.bib", 3), ("missing.bib", 0)]
         );
-        let unsaved = load(None, header, false);
+        let unsaved = load_summaries(None, header, false);
         assert_eq!(unsaved.entries.len(), 1);
         assert!(unsaved.warnings[1].starts_with("refs.bib: save the document first"));
-        assert!(load(None, "references: [\n", false).warnings[0].starts_with("header: "));
+        assert!(load_summaries(None, "references: [\n", false).warnings[0].starts_with("header: "));
         let _ = fs::remove_dir_all(&dir);
     }
 

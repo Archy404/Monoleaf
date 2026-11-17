@@ -8,7 +8,7 @@
 import { invoke } from "@tauri-apps/api/core";
 import { frontMatter } from "./meta";
 
-/** COUPLED: `ReferenceSummary`, `Source` and `Loaded` in src-tauri/src/references.rs. */
+/** COUPLED: `ReferenceSummary`, `Source` and `LoadedSummaries` in src-tauri/src/references.rs. */
 export interface ReferenceSummary {
   key: string;
   authors: string[];

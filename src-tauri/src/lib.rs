@@ -1031,9 +1031,9 @@ fn find_images_named(dir: &str, name: &str) -> Result<Vec<String>, String> {
 async fn load_references(
     document_path: Option<String>,
     front_matter: String,
-) -> Result<references::Loaded, String> {
+) -> Result<references::LoadedSummaries, String> {
     off_main_thread(move || {
-        Ok(references::load(
+        Ok(references::load_summaries(
             document_path.as_deref(),
             &front_matter,
             ALLOW_NETWORK_PATHS.load(Ordering::Relaxed),
