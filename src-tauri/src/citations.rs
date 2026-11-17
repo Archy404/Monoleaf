@@ -6,8 +6,10 @@
 
 use crate::references::{self, Reference};
 use hayagriva::archive::{locales, ArchivedStyle};
-use hayagriva::citationberg::taxonomy::Locator;
-use hayagriva::citationberg::{IndependentStyle, LocaleCode, Style};
+use hayagriva::citationberg::taxonomy::{Locator, Term};
+use hayagriva::citationberg::{
+    CitationFormat, IndependentStyle, Locale, LocaleCode, Style, StyleCategory, TermForm,
+};
 use hayagriva::{
     BibliographyDriver, BibliographyRequest, BufWriteFormat, CitationItem, CitationRequest,
     CitePurpose, ElemChild, ElemChildren, LocatorPayload, SpecificLocator,
@@ -58,9 +60,187 @@ pub struct Citation {
 #[serde(rename_all = "camelCase")]
 pub struct CitedItem {
     pub key: String,
-    /// What follows the key, `p. 3`; read as a page until labels are parsed.
+    /// Text before the key, `see`; placed only for the first item of a group.
     #[serde(default)]
-    pub locator: Option<String>,
+    pub prefix: String,
+    /// Text after the key, `p. 3, emphasis added`: a locator at its start is
+    /// read out, the rest is placed only for the last item of a group.
+    #[serde(default)]
+    pub suffix: String,
+    /// `-@key`: the author is left out, "(2020)" in author-date styles.
+    #[serde(default)]
+    pub suppress_author: bool,
+}
+
+/// Every locator kind CSL knows; the locale holds the terms for each.
+const LOCATOR_KINDS: [Locator; 29] = [
+    Locator::Act,
+    Locator::Appendix,
+    Locator::ArticleLocator,
+    Locator::Book,
+    Locator::Canon,
+    Locator::Chapter,
+    Locator::Column,
+    Locator::Elocation,
+    Locator::Equation,
+    Locator::Figure,
+    Locator::Folio,
+    Locator::Issue,
+    Locator::Line,
+    Locator::Note,
+    Locator::Opus,
+    Locator::Page,
+    Locator::Paragraph,
+    Locator::Part,
+    Locator::Rule,
+    Locator::Scene,
+    Locator::Section,
+    Locator::SubVerbo,
+    Locator::Supplement,
+    Locator::Table,
+    Locator::Timestamp,
+    Locator::Title,
+    Locator::TitleLocator,
+    Locator::Verse,
+    Locator::Volume,
+];
+
+/// What a locale calls each locator kind, "p.", "pp.", "page", "pages" for
+/// a page: the terms pandoc reads a locator by. The document's locale first,
+/// then English, so "S. 3" and "p. 3" both work in a German document. The
+/// longest term comes first, so "pp." is tried before "p.".
+fn locator_terms(locales: &[Locale], code: &LocaleCode) -> Vec<(String, Locator)> {
+    let mut terms = Vec::new();
+    for lang in [code, &LocaleCode::en_us()] {
+        let found = locales.iter().find(|l| l.lang.as_ref() == Some(lang));
+        let Some(locale) = found else {
+            continue;
+        };
+        for kind in LOCATOR_KINDS {
+            for form in [TermForm::Long, TermForm::Short] {
+                let Some(term) = locale.term(Term::Locator(kind), form) else {
+                    continue;
+                };
+                for text in [term.single(), term.multiple()].into_iter().flatten() {
+                    let text = text.trim_end_matches('.');
+                    if !text.is_empty() {
+                        terms.push((text.to_string(), kind));
+                    }
+                }
+            }
+        }
+    }
+    terms.sort_by_key(|(text, _)| std::cmp::Reverse(text.len()));
+    terms
+}
+
+/// Pandoc's reading of what follows a key: a locator term with its number at
+/// the start, "p. 3" or "chap. 2", or a bare number as a page; what follows
+/// the number is the suffix. The term's dot is optional, the kind's own label
+/// comes from the style. Nothing for a text that starts with neither.
+fn split_locator<'a>(
+    text: &'a str,
+    terms: &[(String, Locator)],
+) -> (Option<SpecificLocator<'a>>, &'a str) {
+    let text = text.trim();
+    let term = terms.iter().find(|(term, _)| {
+        text.is_char_boundary(term.len())
+            && text[..term.len()].eq_ignore_ascii_case(term)
+            && text[term.len()..].starts_with(['.', ' '])
+    });
+    let (kind, rest) = match term {
+        Some((term, kind)) => (*kind, text[term.len()..].trim_start_matches(['.', ' '])),
+        None if text.starts_with(|c: char| c.is_ascii_digit()) => (Locator::Page, text),
+        None => return (None, text),
+    };
+    // The number runs over digits, dashes, and a comma or space that leads
+    // to another digit; "3-5, emphasis added" stops before the second comma.
+    let bytes = rest.as_bytes();
+    let leads_on = |n: usize| bytes.get(n).is_some_and(u8::is_ascii_digit);
+    let mut end = 0;
+    while end < bytes.len() {
+        let c = bytes[end];
+        let joins = (c == b',' || c == b' ') && (leads_on(end + 1) || leads_on(end + 2));
+        if c.is_ascii_digit() || c == b'-' || joins {
+            end += 1;
+        } else if rest[end..].starts_with('\u{2013}') {
+            end += '\u{2013}'.len_utf8();
+        } else {
+            break;
+        }
+    }
+    let number = rest[..end].trim_end_matches([',', ' ']);
+    let suffix = rest[end..].trim_start_matches([',', ' ']);
+    (
+        Some(SpecificLocator(kind, LocatorPayload::Str(number))),
+        suffix,
+    )
+}
+
+fn is_numeric(style: &IndependentStyle) -> bool {
+    let numeric = |category: &StyleCategory| {
+        matches!(
+            category,
+            StyleCategory::CitationFormat {
+                format: CitationFormat::Numeric
+            }
+        )
+    };
+    style.info.category.iter().any(numeric)
+}
+
+/// The bracket a rendered citation opens with: the style's own, else a plain
+/// one, as numeric styles print theirs from inside the layout.
+fn opening<'h>(html: &'h str, style: &IndependentStyle) -> Option<&'h str> {
+    let own = style.citation.layout.prefix.as_deref().unwrap_or("");
+    [own, "(", "["]
+        .into_iter()
+        .find(|b| !b.is_empty() && html.starts_with(b))
+        .map(|b| &html[..b.len()])
+}
+
+fn closing<'h>(html: &'h str, style: &IndependentStyle) -> Option<&'h str> {
+    let own = style.citation.layout.suffix.as_deref().unwrap_or("");
+    [own, ")", "]"]
+        .into_iter()
+        .find(|b| !b.is_empty() && html.ends_with(b))
+        .map(|b| &html[html.len() - b.len()..])
+}
+
+/// Pandoc's extras hayagriva has no item for. A suppressed author cuts the
+/// prose form "Doe (2020, p. 3)" at its bracket; the first item's prefix goes
+/// in after the opening bracket, the last item's suffix before the closing one.
+fn decorate(
+    mut html: String,
+    citation: &Citation,
+    suffixes: &[&str],
+    style: &IndependentStyle,
+) -> String {
+    let (Some(first), Some(suffix)) = (citation.items.first(), suffixes.last()) else {
+        return html;
+    };
+    if suppresses_author(citation, style) {
+        let bracket = style.citation.layout.prefix.as_deref().unwrap_or("(");
+        if let Some(at) = html.find(bracket) {
+            html.replace_range(..at, "");
+        }
+    }
+    let prefix = first.prefix.trim();
+    if !prefix.is_empty() {
+        let at = opening(&html, style).map_or(0, str::len);
+        html.insert_str(at, &format!("{prefix} "));
+    }
+    let suffix = suffix.trim();
+    if !suffix.is_empty() {
+        let at = html.len() - closing(&html, style).map_or(0, str::len);
+        html.insert_str(at, &format!(", {suffix}"));
+    }
+    html
+}
+
+/// Only a citation of one work drops its author; numeric styles never do.
+fn suppresses_author(citation: &Citation, style: &IndependentStyle) -> bool {
+    citation.items.len() == 1 && citation.items[0].suppress_author && !is_numeric(style)
 }
 
 /// What the export prints: the citations in order and the reference list.
@@ -126,6 +306,18 @@ pub fn render(
     for reference in references {
         by_key.entry(key_of(reference)).or_insert(reference);
     }
+    let locales = locales();
+    let terms = locator_terms(&locales, locale);
+    // The suffix of each item once its locator is read out, for decorate().
+    let suffixes: Vec<Vec<&str>> = citations
+        .iter()
+        .map(|c| {
+            c.items
+                .iter()
+                .map(|i| split_locator(&i.suffix, &terms).1)
+                .collect()
+        })
+        .collect();
     let mut bib = Vec::new();
     let mut csl = Vec::new();
     for (index, citation) in citations.iter().enumerate() {
@@ -134,10 +326,8 @@ pub fn render(
         let mut known = true;
         for item in &citation.items {
             match by_key.get(&item.key) {
-                Some(Reference::Bib(entry)) => {
-                    entries.push((entry.as_ref(), item.locator.as_deref()))
-                }
-                Some(Reference::Csl(csl_item)) => items.push((csl_item, item.locator.as_deref())),
+                Some(Reference::Bib(entry)) => entries.push((entry.as_ref(), item)),
+                Some(Reference::Csl(csl_item)) => items.push((csl_item, item)),
                 None => {
                     out.warnings.push(format!(
                         "citation {}: no reference has the key {}",
@@ -147,6 +337,22 @@ pub fn render(
                     known = false;
                 }
             }
+        }
+        let inner = citation.items.iter().enumerate().any(|(i, item)| {
+            (i > 0 && !item.prefix.trim().is_empty())
+                || (i + 1 < citation.items.len() && !suffixes[index][i].trim().is_empty())
+        });
+        if inner {
+            out.warnings.push(format!(
+                "citation {}: only the first prefix and the last suffix of a group are printed",
+                index + 1
+            ));
+        }
+        if citation.items.len() > 1 && citation.items.iter().any(|item| item.suppress_author) {
+            out.warnings.push(format!(
+                "citation {}: -@ is ignored inside a group",
+                index + 1
+            ));
         }
         match (known, entries.is_empty(), items.is_empty()) {
             (true, false, true) => bib.push((index, entries)),
@@ -158,7 +364,6 @@ pub fn render(
             _ => {}
         }
     }
-    let locales = locales();
     // The same run for both entry types; a macro, since the type that would
     // make this a generic function is hayagriva's private trait.
     macro_rules! run {
@@ -167,11 +372,11 @@ pub fn render(
             for (index, entries) in &$cited {
                 let items = entries
                     .iter()
-                    .map(|(entry, locator)| {
-                        let locator = locator
-                            .map(|page| SpecificLocator(Locator::Page, LocatorPayload::Str(page)));
+                    .map(|(entry, cited)| {
+                        let citation = &citations[*index];
+                        let locator = split_locator(&cited.suffix, &terms).0;
                         let item = CitationItem::with_locator(*entry, locator);
-                        match citations[*index].in_text {
+                        match citation.in_text || suppresses_author(citation, style) {
                             true => item.kind(CitePurpose::Prose),
                             false => item,
                         }
@@ -184,7 +389,9 @@ pub fn render(
             let request = BibliographyRequest::new(style, Some(locale.clone()), &locales);
             let rendered = driver.finish(request);
             for ((index, _), citation) in $cited.iter().zip(rendered.citations) {
-                out.citations[*index] = Some(html(&citation.citation));
+                let text = html(&citation.citation);
+                let text = decorate(text, &citations[*index], &suffixes[*index], style);
+                out.citations[*index] = Some(text);
             }
             if let Some(list) = rendered.bibliography {
                 out.hanging_indent = list.hanging_indent;
@@ -316,7 +523,7 @@ mod tests {
         let mut references = read_biblatex(BIB).references;
         references.extend(read_csl_yaml(ISSUE_EXAMPLE).unwrap().references);
         let mut page = cite(&["doe2020"]);
-        page.items[0].locator = Some("3".into());
+        page.items[0].suffix = "3".into();
         let cited = [
             cite(&["ERA5LandHourlyData2019"]),
             page,
@@ -336,6 +543,92 @@ mod tests {
         assert_eq!(labels, [Some("[1]"), Some("[2]")]);
         assert_eq!(out.warnings.len(), 3, "{:?}", out.warnings);
         assert!(out.warnings[0].contains("citation 3:") && out.warnings[1].contains("nobody"));
+    }
+
+    #[test]
+    fn prefix_suffix_locator_and_suppressed_author_print_as_pandoc_does() {
+        let references = read_biblatex(BIB).references;
+        let mut seen = cite(&["doe2020"]);
+        seen.items[0].prefix = "see".into();
+        seen.items[0].suffix = "chap. 2, emphasis added".into();
+        let mut year = cite(&["doe2020"]);
+        year.items[0].suppress_author = true;
+        year.items[0].suffix = "p. 3".into();
+        let mut page = cite(&["doe2020"]);
+        page.items[0].suffix = "12".into();
+        let mut group = cite(&["doe2020", "doe2020"]);
+        group.items[1].prefix = "also".into();
+        group.items[1].suppress_author = true;
+        let cited = [seen, year, page, group];
+        let locale = locale_named(None);
+        let apa = render(
+            &references,
+            &style_named(Some("apa")).unwrap(),
+            &locale,
+            &cited,
+        );
+        let texts: Vec<_> = apa
+            .citations
+            .iter()
+            .map(|c| c.as_deref().unwrap())
+            .collect();
+        assert_eq!(
+            texts[..3],
+            [
+                "(see Doe & Roe, 2020, Chapter 2, emphasis added)",
+                "(2020, p. 3)",
+                "(Doe & Roe, 2020, p. 12)"
+            ]
+        );
+        assert_eq!(apa.warnings.len(), 2, "{:?}", apa.warnings);
+        let ieee = render(
+            &references,
+            &style_named(Some("ieee")).unwrap(),
+            &locale,
+            &cited,
+        );
+        assert_eq!(
+            ieee.citations[0].as_deref(),
+            Some("[see 1, Ch. 2, emphasis added]")
+        );
+        assert_eq!(ieee.citations[1].as_deref(), Some("[1, p. 3]"));
+    }
+
+    #[test]
+    fn locator_terms_come_from_the_locale_and_english() {
+        let references = read_biblatex(BIB).references;
+        let texts = [
+            "pp. 3-5, emphasis added",
+            "Kap 2",
+            "S. 7",
+            "page 9, see",
+            "nothing numeric",
+        ];
+        let cited: Vec<Citation> = texts
+            .iter()
+            .map(|text| {
+                let mut c = cite(&["doe2020"]);
+                c.items[0].suffix = text.to_string();
+                c
+            })
+            .collect();
+        let style = style_named(Some("apa")).unwrap();
+        let out = render(&references, &style, &locale_named(Some("de-DE")), &cited);
+        let texts: Vec<_> = out
+            .citations
+            .iter()
+            .map(|c| c.as_deref().unwrap())
+            .collect();
+        assert_eq!(
+            texts,
+            [
+                "(Doe & Roe, 2020, S. 3\u{2013}5, emphasis added)",
+                "(Doe & Roe, 2020, Kapitel 2)",
+                "(Doe & Roe, 2020, S. 7)",
+                "(Doe & Roe, 2020, S. 9, see)",
+                "(Doe & Roe, 2020, nothing numeric)"
+            ]
+        );
     }
 
     #[test]

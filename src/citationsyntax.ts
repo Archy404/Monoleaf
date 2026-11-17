@@ -37,14 +37,14 @@ export function citationAt(text: string, pos: number): Citation | null {
   return { from: at, to: end, key: text.slice(start, end) };
 }
 
-/** One cited work inside a citation, with what the citation says about it. */
+/** One cited work inside a citation, with what the citation says about it.
+ * The backend reads a locator, "p. 3", off the start of the suffix: the
+ * terms it knows come from the citation locale, not from here. */
 export interface CitedItem {
   key: string;
   /** Text before the key: "see" in `[see @a]`. */
   prefix: string;
-  /** Where in the work: "p. 3", "chap. 2"; empty when none. */
-  locator: string;
-  /** Text after the locator, or after the key when there is none. */
+  /** Text after the key, without the comma: "p. 3, emphasis added". */
   suffix: string;
   /** `-@a`: the author is left out, "(2020)" in author-date styles. */
   suppressAuthor: boolean;
@@ -59,20 +59,9 @@ export interface ParsedCitation {
   inText: boolean;
 }
 
-// Pandoc's locator terms, short or long, then the numbers; a bare number is
-// a page. What follows the last digit belongs to the suffix.
-const LOCATOR =
-  /^(?:(?:p{1,2}|pages?|chap(?:ter)?|sec(?:tion)?|para(?:graph)?|fig(?:ure)?|vol(?:ume)?|n|note|col(?:umn)?|pt|part|bk|book|l|line|no|number|v|verse)\.?\s*)?\d[\d\-–,\s]*/i;
-
-/** The locator and the suffix of what follows a key, `, p. 3, emphasis added`. */
-function locatorAndSuffix(rest: string): { locator: string; suffix: string } {
-  const text = rest.replace(/^\s*,?\s*/, "");
-  const found = LOCATOR.exec(text);
-  if (found === null) return { locator: "", suffix: text.trim() };
-  return {
-    locator: found[0].replace(/[,\s]+$/, ""),
-    suffix: text.slice(found[0].length).trim(),
-  };
+/** What follows a key, without the comma that pandoc allows after it. */
+function suffixOf(rest: string): string {
+  return rest.replace(/^\s*,?\s*/, "").trim();
 }
 
 /** One `;`-separated part of a bracket as a cited work, or null without a key. */
@@ -83,8 +72,8 @@ function parseItem(part: string): CitedItem | null {
     const before = part.slice(0, found.from);
     const suppressAuthor = before.endsWith("-");
     const prefix = (suppressAuthor ? before.slice(0, -1) : before).trim();
-    const { locator, suffix } = locatorAndSuffix(part.slice(found.to));
-    return { key: found.key, prefix, locator, suffix, suppressAuthor };
+    const suffix = suffixOf(part.slice(found.to));
+    return { key: found.key, prefix, suffix, suppressAuthor };
   }
   return null;
 }
@@ -119,12 +108,11 @@ export function findCitations(text: string): ParsedCitation[] {
       if (found !== null && found.key !== "") {
         // the in-text form may carry its locator in a bracket: `@a [p. 3]`
         const bracket = /^ ?\[([^\]@]*)\]/.exec(text.slice(found.to));
-        const { locator, suffix } = locatorAndSuffix(bracket?.[1] ?? "");
+        const suffix = suffixOf(bracket?.[1] ?? "");
         const to = found.to + (bracket?.[0].length ?? 0);
         const item = {
           key: found.key,
           prefix: "",
-          locator,
           suffix,
           suppressAuthor: false,
         };

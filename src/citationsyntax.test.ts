@@ -4,7 +4,6 @@ import { findCitations, type CitedItem } from "./citationsyntax";
 const item = (key: string, rest: Partial<CitedItem> = {}): CitedItem => ({
   key,
   prefix: "",
-  locator: "",
   suffix: "",
   suppressAuthor: false,
   ...rest,
@@ -17,25 +16,21 @@ describe("findCitations", () => {
     ]);
   });
 
-  it("splits a group into prefix, key, locator and suffix", () => {
+  it("splits a group into prefix, key and suffix", () => {
     const [found] = findCitations(
       "[see @doe2020, pp. 3-5, emphasis added; also -@roe, chap. 2; @x]",
     );
     expect(found.items).toEqual([
-      item("doe2020", {
-        prefix: "see",
-        locator: "pp. 3-5",
-        suffix: "emphasis added",
-      }),
-      item("roe", { prefix: "also", locator: "chap. 2", suppressAuthor: true }),
+      item("doe2020", { prefix: "see", suffix: "pp. 3-5, emphasis added" }),
+      item("roe", { prefix: "also", suffix: "chap. 2", suppressAuthor: true }),
       item("x"),
     ]);
   });
 
-  it("takes a bare number as a page and keeps other text as the suffix", () => {
-    const [found] = findCitations("[@doe2020, 12; @roe, and others]");
+  it("drops the comma after the key and keeps the rest as the suffix", () => {
+    const [found] = findCitations("[@doe2020, 12; @roe and others]");
     expect(found.items).toEqual([
-      item("doe2020", { locator: "12" }),
+      item("doe2020", { suffix: "12" }),
       item("roe", { suffix: "and others" }),
     ]);
   });
@@ -45,7 +40,7 @@ describe("findCitations", () => {
       {
         from: 0,
         to: 15,
-        items: [item("doe2020", { locator: "p. 3" })],
+        items: [item("doe2020", { suffix: "p. 3" })],
         inText: true,
       },
       { from: 26, to: 30, items: [item("roe")], inText: true },
