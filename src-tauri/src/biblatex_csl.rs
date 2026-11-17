@@ -1,0 +1,821 @@
+//! A `.bib` entry as a CSL item. The entry types and fields map as Pandoc's
+//! BibTeX reader maps them, so a `.bib` file renders like the same works in
+//! CSL JSON, and like Pandoc prints them. A field Pandoc does not read is not
+//! read here either.
+
+use biblatex::{Chunks, ChunksExt, ChunksRef, Date, DateValue as BibDate, Entry, EntryType};
+use hayagriva::citationberg::json::{
+    DateValue, Item, LiteralName, NameItem, NameValue, Value, VecDate, VecDateRange,
+};
+use std::collections::BTreeMap;
+
+/// The genre Pandoc gives a thesis without a `type` field.
+const PHD_THESIS: &str = "PhD thesis";
+const MASTERS_THESIS: &str = "Master's thesis";
+
+/// The `type` and `pubstate` values BibLaTeX defines as keys, with their
+/// English text; any other value is taken as its own text.
+const KEY_TEXTS: [(&str, &str); 14] = [
+    ("bathesis", "Bachelor's thesis"),
+    ("mathesis", MASTERS_THESIS),
+    ("phdthesis", PHD_THESIS),
+    ("candthesis", "Candidate thesis"),
+    ("resreport", "research report"),
+    ("techreport", "technical report"),
+    ("software", "computer software"),
+    ("datacd", "CD-ROM"),
+    ("audiocd", "audio CD"),
+    ("inpreparation", "in preparation"),
+    ("submitted", "submitted"),
+    ("forthcoming", "forthcoming"),
+    ("inpress", "in press"),
+    ("prepublished", "pre-published"),
+];
+
+/// The `pubstate` texts a `year` field may hold instead of a year.
+const STATUS_TEXTS: [&str; 5] = [
+    "in press",
+    "forthcoming",
+    "submitted",
+    "in preparation",
+    "pre-published",
+];
+
+/// BibLaTeX language names and the CSL locale each stands for.
+const LANGUAGES: [(&str, &str); 21] = [
+    ("english", "en-US"),
+    ("american", "en-US"),
+    ("usenglish", "en-US"),
+    ("british", "en-GB"),
+    ("ukenglish", "en-GB"),
+    ("australian", "en-GB"),
+    ("newzealand", "en-GB"),
+    ("german", "de-DE"),
+    ("ngerman", "de-DE"),
+    ("french", "fr-FR"),
+    ("spanish", "es-ES"),
+    ("italian", "it-IT"),
+    ("dutch", "nl-NL"),
+    ("portuguese", "pt-PT"),
+    ("brazilian", "pt-BR"),
+    ("russian", "ru-RU"),
+    ("swedish", "sv-SE"),
+    ("danish", "da-DK"),
+    ("norwegian", "nb-NO"),
+    ("finnish", "fi-FI"),
+    ("polish", "pl-PL"),
+];
+
+/// The `eprinttype` values that name a site, and the URL an eprint id follows.
+const EPRINT_SITES: [(&str, &str); 4] = [
+    ("arxiv", "https://arxiv.org/abs/"),
+    ("jstor", "https://www.jstor.org/stable/"),
+    ("pubmed", "https://www.ncbi.nlm.nih.gov/pubmed/"),
+    ("googlebooks", "https://books.google.com?id="),
+];
+
+/// The CSL item for one entry. Never fails: a field that cannot be read as
+/// its type is taken as text, a date that is no date becomes the literal
+/// text of the date.
+pub fn item_of(entry: &Entry) -> Item {
+    let mut item = Fields::default();
+    item.set("id", Some(entry.key.clone()));
+    item.set("type", csl_type(entry).map(str::to_string));
+    item.set("genre", genre(entry));
+    titles(entry, &mut item);
+    numbers(entry, &mut item);
+    publishers(entry, &mut item);
+    identifiers(entry, &mut item);
+    notes(entry, &mut item);
+    names(entry, &mut item);
+    dates(entry, &mut item);
+    Item(item.0)
+}
+
+/// The variables of an item while it is built; `set` with `None` sets nothing.
+#[derive(Default)]
+struct Fields(BTreeMap<String, Value>);
+
+impl Fields {
+    fn set(&mut self, name: &str, value: Option<String>) {
+        if let Some(value) = value.filter(|v| !v.is_empty()) {
+            self.0.insert(name.to_string(), Value::String(value));
+        }
+    }
+
+    fn has(&self, name: &str) -> bool {
+        self.0.contains_key(name)
+    }
+}
+
+/// The CSL item type of the entry type; `None` for `misc`, `set`, `xdata`
+/// and unknown types, which Pandoc leaves without a type.
+fn csl_type(entry: &Entry) -> Option<&'static str> {
+    use EntryType::*;
+    Some(match &entry.entry_type {
+        Article | Periodical | SuppPeriodical => match text(entry, "entrysubtype").as_deref() {
+            Some("magazine") => "article-magazine",
+            Some("newspaper") => "article-newspaper",
+            _ => "article-journal",
+        },
+        Book | BookInBook | Collection | Manual | MvBook | MvCollection | MvProceedings
+        | MvReference | Proceedings | Reference => "book",
+        Booklet => "pamphlet",
+        Dataset => "dataset",
+        Online => "webpage",
+        InBook | InCollection | SuppBook | SuppCollection => "chapter",
+        InReference => "entry-encyclopedia",
+        InProceedings => "paper-conference",
+        MastersThesis | PhdThesis | Thesis => "thesis",
+        Patent => "patent",
+        Report | TechReport => "report",
+        Software => "software",
+        Unpublished => {
+            if ["eventdate", "eventtitle", "venue"]
+                .iter()
+                .any(|f| entry.get(f).is_some())
+            {
+                "speech"
+            } else {
+                "manuscript"
+            }
+        }
+        Misc | Set | XData => return None,
+        Unknown(name) => match name.to_ascii_lowercase().as_str() {
+            "electronic" | "www" => "webpage",
+            "artwork" | "image" => "graphic",
+            "audio" | "music" => "song",
+            "jurisdiction" => "legal_case",
+            "legislation" | "standard" => "legislation",
+            "legal" => "treaty",
+            "letter" | "letters" => "personal_communication",
+            "movie" | "video" => "motion_picture",
+            "performance" => "speech",
+            "review" => "review",
+            "newsarticle" => "article-newspaper",
+            "commentary" => "book",
+            "data" => "dataset",
+            _ => return None,
+        },
+    })
+}
+
+/// A part of a book: its `booktitle` is the container.
+fn is_chapter_like(entry: &Entry) -> bool {
+    use EntryType::*;
+    matches!(
+        entry.entry_type,
+        InBook
+            | InCollection
+            | InProceedings
+            | InReference
+            | BookInBook
+            | SuppBook
+            | SuppCollection
+    )
+}
+
+/// A periodical article: its `number` is the issue.
+fn is_article_like(entry: &Entry) -> bool {
+    use EntryType::*;
+    match &entry.entry_type {
+        Article | Periodical | SuppPeriodical => true,
+        Unknown(name) => name.eq_ignore_ascii_case("review"),
+        _ => false,
+    }
+}
+
+/// A book or a part of one: its `number` is the number in the series.
+fn is_book_like(entry: &Entry) -> bool {
+    use EntryType::*;
+    matches!(
+        entry.entry_type,
+        Book | Collection
+            | Proceedings
+            | Reference
+            | MvBook
+            | MvCollection
+            | MvProceedings
+            | MvReference
+    ) || is_chapter_like(entry)
+}
+
+/// The `type` field as text, or the thesis kind the entry type implies.
+fn genre(entry: &Entry) -> Option<String> {
+    match text(entry, "type") {
+        Some(value) => Some(key_text(&value)),
+        None => match entry.entry_type {
+            EntryType::PhdThesis => Some(PHD_THESIS.to_string()),
+            EntryType::MastersThesis => Some(MASTERS_THESIS.to_string()),
+            _ => None,
+        },
+    }
+}
+
+/// A BibLaTeX key's English text; any other value is its own text.
+fn key_text(value: &str) -> String {
+    let key = value.to_ascii_lowercase();
+    KEY_TEXTS
+        .iter()
+        .find(|(name, _)| *name == key)
+        .map_or_else(|| value.to_string(), |(_, text)| text.to_string())
+}
+
+/// Title, container and series. A book with a `maintitle` is a volume of
+/// it: the main title is the title, the book's own becomes the volume title.
+fn titles(entry: &Entry, item: &mut Fields) {
+    let own = joined(entry, "title", "subtitle", "titleaddon");
+    if !is_chapter_like(entry) && entry.get("maintitle").is_some() {
+        item.set(
+            "title",
+            joined(entry, "maintitle", "mainsubtitle", "maintitleaddon"),
+        );
+        item.set("volume-title", own);
+    } else {
+        item.set("title", own.clone());
+        match text(entry, "shorttitle") {
+            Some(short) => item.set("title-short", Some(short)),
+            None if entry.get("subtitle").is_some() || entry.get("titleaddon").is_some() => {
+                item.set("title-short", text(entry, "title"));
+            }
+            None => {}
+        }
+    }
+    if is_chapter_like(entry) && entry.get("booktitle").is_some() {
+        item.set(
+            "container-title",
+            joined(entry, "booktitle", "booksubtitle", "booktitleaddon"),
+        );
+    } else if entry.get("journaltitle").is_some() {
+        item.set(
+            "container-title",
+            joined(
+                entry,
+                "journaltitle",
+                "journalsubtitle",
+                "journaltitleaddon",
+            ),
+        );
+    } else {
+        item.set("container-title", text(entry, "journal"));
+    }
+    item.set("container-title-short", text(entry, "shortjournal"));
+    item.set("collection-title", text(entry, "series"));
+    item.set("event", text(entry, "eventtitle"));
+    item.set("original-title", text(entry, "origtitle"));
+}
+
+/// "Title: Subtitle. Addon", each part only when present; after a part that
+/// ends in punctuation only a space follows.
+fn joined(entry: &Entry, title: &str, subtitle: &str, addon: &str) -> Option<String> {
+    let mut out = text(entry, title)?;
+    for (field, separator) in [(subtitle, ":"), (addon, ".")] {
+        if let Some(part) = text(entry, field) {
+            if !out.ends_with(['!', '?', '.', ',', ':', ';']) {
+                out.push_str(separator);
+            }
+            out.push(' ');
+            out.push_str(&part);
+        }
+    }
+    Some(out)
+}
+
+/// Pages, volume, edition and the `number` field, which is the issue of an
+/// article, the number in a series of a book, and a plain number elsewhere.
+fn numbers(entry: &Entry, item: &mut Fields) {
+    item.set(
+        "page",
+        text(entry, "pages").map(|p| p.replace('\u{2013}', "-")),
+    );
+    let volume = text(entry, "volume");
+    let part = text(entry, "part");
+    item.set(
+        "volume",
+        match (volume, part) {
+            (Some(volume), Some(part)) => Some(format!("{volume}.{part}")),
+            (volume, part) => volume.or(part),
+        },
+    );
+    item.set("number-of-volumes", text(entry, "volumes"));
+    item.set("number-of-pages", text(entry, "pagetotal"));
+    item.set("chapter-number", text(entry, "chapter"));
+    item.set("edition", text(entry, "edition"));
+    item.set("version", text(entry, "version"));
+    let number = text(entry, "number");
+    if is_article_like(entry) {
+        let issue = text(entry, "issue");
+        item.set(
+            "issue",
+            match (number, issue) {
+                (Some(number), Some(issue)) => Some(format!("{number}, {issue}")),
+                (number, _) => number,
+            },
+        );
+    } else if is_book_like(entry) {
+        item.set("collection-number", number);
+    } else {
+        item.set("number", number);
+    }
+}
+
+/// Publisher and places. School, institution, organization, `howpublished`
+/// and publisher are all the publisher, in that order; a `location` of a
+/// patent is its jurisdiction.
+fn publishers(entry: &Entry, item: &mut Fields) {
+    let mut parts = Vec::new();
+    for field in ["school", "institution", "organization"] {
+        parts.extend(list(entry, field));
+    }
+    parts.extend(text(entry, "howpublished"));
+    parts.extend(list(entry, "publisher"));
+    item.set("publisher", (!parts.is_empty()).then(|| parts.join("; ")));
+    let is_patent = entry.entry_type == EntryType::Patent;
+    let location = text(entry, "location");
+    let address = text(entry, "address");
+    if is_patent {
+        item.set("publisher-place", address);
+        item.set("jurisdiction", location);
+    } else {
+        item.set("publisher-place", address.or(location));
+    }
+    item.set("original-publisher", text(entry, "origpublisher"));
+    item.set("original-publisher-place", text(entry, "origlocation"));
+    item.set("event-place", text(entry, "venue"));
+}
+
+/// URL, DOI and the identifier fields, which CSL names in capitals; an
+/// eprint on a known site gives the URL when the entry has none.
+fn identifiers(entry: &Entry, item: &mut Fields) {
+    item.set("URL", text(entry, "url"));
+    if !item.has("URL") {
+        let site = text(entry, "eprinttype")
+            .or_else(|| text(entry, "archiveprefix"))
+            .map(|s| s.to_ascii_lowercase());
+        if let (Some(site), Some(id)) = (site, text(entry, "eprint")) {
+            if let Some((_, base)) = EPRINT_SITES.iter().find(|(name, _)| *name == site) {
+                item.set("URL", Some(format!("{base}{id}")));
+            }
+        }
+    }
+    item.set("DOI", text(entry, "doi"));
+    item.set("ISBN", text(entry, "isbn"));
+    item.set("ISSN", text(entry, "issn"));
+    item.set("PMID", text(entry, "pmid"));
+    item.set("PMCID", text(entry, "pmcid"));
+    item.set("call-number", text(entry, "library"));
+}
+
+/// Note, abstract, keywords, status and language. The note of a periodical
+/// is not read, as Pandoc does not read it.
+fn notes(entry: &Entry, item: &mut Fields) {
+    item.set(
+        "annote",
+        text(entry, "annotation").or_else(|| text(entry, "annote")),
+    );
+    item.set("abstract", text(entry, "abstract"));
+    item.set("keyword", text(entry, "keywords"));
+    let note = (entry.entry_type != EntryType::Periodical)
+        .then(|| text(entry, "note"))
+        .flatten();
+    let addendum = text(entry, "addendum");
+    item.set(
+        "note",
+        match (note, addendum) {
+            (Some(note), Some(addendum)) => Some(joined_sentences(note, &addendum)),
+            (note, addendum) => note.or(addendum),
+        },
+    );
+    item.set("status", text(entry, "pubstate").map(|s| key_text(&s)));
+    // Pandoc keeps "in press" as the literal text of the date and the style
+    // prints it there; hayagriva prints no literal date, so the status says it.
+    if !item.has("status") && entry.get("date").is_none() {
+        if let Some(literal) = text(entry, "year") {
+            let known = STATUS_TEXTS
+                .iter()
+                .any(|t| t.eq_ignore_ascii_case(&literal));
+            item.set("status", known.then_some(literal));
+        }
+    }
+    let language = text(entry, "langid").or_else(|| text(entry, "hyphenation"));
+    item.set(
+        "language",
+        language.map(|name| {
+            let key = name.to_ascii_lowercase();
+            LANGUAGES
+                .iter()
+                .find(|(bib, _)| *bib == key)
+                .map_or(name, |(_, code)| code.to_string())
+        }),
+    );
+}
+
+/// "First. Second", with only a space when the first already ends a sentence.
+fn joined_sentences(mut first: String, second: &str) -> String {
+    if !first.ends_with(['!', '?', '.', ',', ':', ';']) {
+        first.push('.');
+    }
+    first.push(' ');
+    first.push_str(second);
+    first
+}
+
+/// Author, editor, translator and the author of the book a chapter is in.
+/// An `editortype` of director makes the editors directors.
+fn names(entry: &Entry, item: &mut Fields) {
+    let editor_variable = match text(entry, "editortype").as_deref() {
+        Some("director") => "director",
+        _ => "editor",
+    };
+    for (field, variable) in [
+        ("author", "author"),
+        ("editor", editor_variable),
+        ("director", "director"),
+        ("translator", "translator"),
+        ("bookauthor", "container-author"),
+    ] {
+        let Ok(persons) = entry.get_as::<Vec<biblatex::Person>>(field) else {
+            continue;
+        };
+        let values: Vec<NameValue> = persons.iter().map(name_value).collect();
+        if !values.is_empty() {
+            item.0.insert(variable.to_string(), Value::Names(values));
+        }
+    }
+}
+
+/// One name. A name the parser could not split, "{Copernicus Climate Change
+/// Service}", is a literal name. A particle is a dropping particle, as
+/// Pandoc takes it, unless the name says `useprefix`.
+fn name_value(person: &biblatex::Person) -> NameValue {
+    let family = unlatex(&person.name);
+    let given = unlatex(&person.given_name);
+    let particle = unlatex(&person.prefix);
+    let suffix = unlatex(&person.suffix);
+    if given.is_empty()
+        && particle.is_empty()
+        && suffix.is_empty()
+        && family.contains(char::is_whitespace)
+    {
+        return NameValue::Literal(LiteralName { literal: family });
+    }
+    let (non_dropping, dropping) = match person.use_prefix {
+        Some(true) => (Some(particle), None),
+        _ => (None, Some(particle)),
+    };
+    NameValue::Item(NameItem {
+        family,
+        given: (!given.is_empty()).then(|| spaced_initials(&given)),
+        non_dropping_particle: non_dropping.filter(|p| !p.is_empty()),
+        dropping_particle: dropping.filter(|p| !p.is_empty()),
+        suffix: (!suffix.is_empty()).then_some(suffix),
+        comma_suffix: None,
+    })
+}
+
+/// "J.G." as "J. G.": a space after an initial's period when a capital
+/// follows directly.
+fn spaced_initials(given: &str) -> String {
+    let mut out = String::with_capacity(given.len() + 2);
+    let mut chars = given.chars().peekable();
+    while let Some(c) = chars.next() {
+        out.push(c);
+        if c == '.' && chars.peek().is_some_and(|next| next.is_uppercase()) {
+            out.push(' ');
+        }
+    }
+    out
+}
+
+/// The date fields: `date` or year, month and day; the original, URL and
+/// event dates likewise. A date that is no date keeps its text as the
+/// literal, so "in press" is not lost.
+fn dates(entry: &Entry, item: &mut Fields) {
+    for (prefix, variable) in [
+        ("", "issued"),
+        ("orig", "original-date"),
+        ("url", "accessed"),
+        ("event", "event-date"),
+    ] {
+        let field = format!("{prefix}date");
+        let year = format!("{prefix}year");
+        let date = match entry.get(&field) {
+            Some(chunks) => Date::parse(chunks)
+                .map(Some)
+                .unwrap_or_else(|_| None)
+                .map(Ok)
+                .unwrap_or_else(|| Err(plain(chunks))),
+            None => match entry.get(&year) {
+                Some(chunks) => Date::parse_three_fields(
+                    chunks,
+                    entry.get(&format!("{prefix}month")),
+                    entry.get(&format!("{prefix}day")),
+                )
+                .map_err(|_| plain(chunks)),
+                None => continue,
+            },
+        };
+        let value = match date {
+            Ok(date) => date_parts(&date),
+            Err(literal) => DateValue::DateParts {
+                date_parts: VecDateRange(Vec::new()),
+                literal: Some(literal),
+                season: None,
+                circa: false,
+            },
+        };
+        item.0.insert(variable.to_string(), Value::Date(value));
+    }
+}
+
+/// A parsed date as CSL date parts: year, then month and day where given.
+fn date_parts(date: &Date) -> DateValue {
+    let parts = |d: &biblatex::Datetime| {
+        let mut parts = vec![d.year as i16];
+        if let Some(month) = d.month {
+            // The parser counts months and days from zero, CSL from one.
+            parts.push(i16::from(month) + 1);
+            if let Some(day) = d.day {
+                parts.push(i16::from(day) + 1);
+            }
+        }
+        VecDate(parts)
+    };
+    let range = match &date.value {
+        BibDate::At(d) | BibDate::After(d) | BibDate::Before(d) => vec![parts(d)],
+        BibDate::Between(start, end) => vec![parts(start), parts(end)],
+    };
+    DateValue::DateParts {
+        date_parts: VecDateRange(range),
+        literal: None,
+        season: None,
+        circa: date.approximate || date.uncertain,
+    }
+}
+
+/// A field's text, or `None` when the entry has no such field or it is empty.
+fn text(entry: &Entry, field: &str) -> Option<String> {
+    let value = plain(entry.get(field)?);
+    (!value.is_empty()).then_some(value)
+}
+
+/// A field that BibLaTeX lists with `and`, as its parts.
+fn list(entry: &Entry, field: &str) -> Vec<String> {
+    match entry.get_as::<Vec<Chunks>>(field) {
+        Ok(parts) => parts
+            .iter()
+            .map(|chunks| plain(chunks))
+            .filter(|part| !part.is_empty())
+            .collect(),
+        Err(_) => text(entry, field).into_iter().collect(),
+    }
+}
+
+/// Chunks as plain text: braces gone, what LaTeX writes as text resolved.
+fn plain(chunks: ChunksRef) -> String {
+    unlatex(&chunks.format_verbatim())
+}
+
+/// Text with TeX's conventions resolved: "--" an en dash, "---" an em dash,
+/// "~" a no-break space, an escaped character the character itself.
+fn unlatex(raw: &str) -> String {
+    let mut out = String::with_capacity(raw.len());
+    let mut chars = raw.chars().peekable();
+    while let Some(c) = chars.next() {
+        match c {
+            '-' if chars.peek() == Some(&'-') => {
+                chars.next();
+                if chars.peek() == Some(&'-') {
+                    chars.next();
+                    out.push('\u{2014}');
+                } else {
+                    out.push('\u{2013}');
+                }
+            }
+            '~' => out.push('\u{a0}'),
+            '\\' if chars.peek().is_some_and(|next| "&%$#_{}".contains(*next)) => {
+                out.push(chars.next().unwrap_or_default());
+            }
+            _ => out.push(c),
+        }
+    }
+    out.trim().to_string()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn item(bib: &str) -> Item {
+        let bibliography = biblatex::Bibliography::parse(bib).unwrap();
+        item_of(bibliography.iter().next().unwrap())
+    }
+
+    fn string<'a>(item: &'a Item, name: &str) -> Option<&'a str> {
+        match item.0.get(name) {
+            Some(Value::String(s)) => Some(s.as_str()),
+            _ => None,
+        }
+    }
+
+    /// Names as "family|given|non-dropping|dropping|suffix", a literal in braces.
+    fn names(item: &Item, variable: &str) -> Vec<String> {
+        let Some(Value::Names(names)) = item.0.get(variable) else {
+            return Vec::new();
+        };
+        names
+            .iter()
+            .map(|name| match name {
+                NameValue::Literal(l) => format!("{{{}}}", l.literal),
+                NameValue::Item(n) => [
+                    n.family.as_str(),
+                    n.given.as_deref().unwrap_or_default(),
+                    n.non_dropping_particle.as_deref().unwrap_or_default(),
+                    n.dropping_particle.as_deref().unwrap_or_default(),
+                    n.suffix.as_deref().unwrap_or_default(),
+                ]
+                .join("|"),
+            })
+            .collect()
+    }
+
+    /// A date as its parts and its literal: "[[2019, 3]] in press".
+    fn date(item: &Item, variable: &str) -> String {
+        match item.0.get(variable) {
+            Some(Value::Date(DateValue::DateParts {
+                date_parts,
+                literal,
+                ..
+            })) => {
+                let parts: Vec<&Vec<i16>> = date_parts.0.iter().map(|d| &d.0).collect();
+                format!("{parts:?} {}", literal.as_deref().unwrap_or_default())
+            }
+            _ => String::from("none"),
+        }
+    }
+
+    #[test]
+    fn an_article_is_an_article_with_an_issue() {
+        let item = item(
+            "@article{doe2020, author={Doe, Jane and Roe, Richard}, title={A Study}, \
+             subtitle={Of Lists}, journal={J. Stud.}, year={2020}, volume={3}, number={2}, \
+             pages={1--9}, doi={10.1000/x}}",
+        );
+        assert_eq!(string(&item, "id"), Some("doe2020"));
+        assert_eq!(string(&item, "type"), Some("article-journal"));
+        assert_eq!(string(&item, "title"), Some("A Study: Of Lists"));
+        assert_eq!(string(&item, "title-short"), Some("A Study"));
+        assert_eq!(string(&item, "container-title"), Some("J. Stud."));
+        assert_eq!(string(&item, "volume"), Some("3"));
+        assert_eq!(string(&item, "issue"), Some("2"));
+        assert_eq!(string(&item, "page"), Some("1-9"));
+        assert_eq!(string(&item, "DOI"), Some("10.1000/x"));
+        assert_eq!(names(&item, "author"), ["Doe|Jane|||", "Roe|Richard|||"]);
+        assert_eq!(date(&item, "issued"), "[[2020]] ");
+    }
+
+    #[test]
+    fn entry_types_map_as_pandoc_maps_them() {
+        let cases = [
+            ("@book{k, title={T}}", Some("book")),
+            ("@inproceedings{k, title={T}}", Some("paper-conference")),
+            ("@incollection{k, title={T}}", Some("chapter")),
+            ("@phdthesis{k, title={T}}", Some("thesis")),
+            ("@techreport{k, title={T}}", Some("report")),
+            ("@online{k, title={T}}", Some("webpage")),
+            ("@electronic{k, title={T}}", Some("webpage")),
+            ("@unpublished{k, title={T}}", Some("manuscript")),
+            ("@unpublished{k, title={T}, eventtitle={E}}", Some("speech")),
+            (
+                "@article{k, title={T}, entrysubtype={newspaper}}",
+                Some("article-newspaper"),
+            ),
+            ("@misc{k, title={T}}", None),
+            ("@whatever{k, title={T}}", None),
+        ];
+        for (bib, expected) in cases {
+            assert_eq!(string(&item(bib), "type"), expected, "{bib}");
+        }
+    }
+
+    #[test]
+    fn a_thesis_and_a_report_keep_their_institution_and_genre() {
+        let thesis = item("@phdthesis{k, title={T}, school={MIT}, year={2001}}");
+        assert_eq!(string(&thesis, "publisher"), Some("MIT"));
+        assert_eq!(string(&thesis, "genre"), Some("PhD thesis"));
+        let masters = item("@mastersthesis{k, title={T}, type={mathesis}}");
+        assert_eq!(string(&masters, "genre"), Some("Master's thesis"));
+        let report = item(
+            "@techreport{k, title={T}, institution={NASA}, number={TR-7}, type={Technical Memo}}",
+        );
+        assert_eq!(string(&report, "publisher"), Some("NASA"));
+        assert_eq!(string(&report, "number"), Some("TR-7"));
+        assert_eq!(string(&report, "genre"), Some("Technical Memo"));
+        let book = item("@book{k, title={T}, series={S}, number={4}, publisher={A and B}}");
+        assert_eq!(string(&book, "collection-number"), Some("4"));
+        assert_eq!(string(&book, "publisher"), Some("A; B"));
+    }
+
+    #[test]
+    fn in_press_is_a_status_and_a_literal_date() {
+        let pubstate = item("@article{k, title={T}, pubstate={inpress}, journal={J}}");
+        assert_eq!(string(&pubstate, "status"), Some("in press"));
+        assert!(!pubstate.0.contains_key("issued"));
+        let year = item("@article{k, title={T}, year={in press}, journal={J}}");
+        assert_eq!(date(&year, "issued"), "[] in press");
+        assert_eq!(string(&year, "status"), Some("in press"));
+        let odd = item("@article{k, title={T}, year={soon}, journal={J}}");
+        assert_eq!(date(&odd, "issued"), "[] soon");
+        assert_eq!(string(&odd, "status"), None);
+    }
+
+    #[test]
+    fn dates_come_from_date_or_year_month_day_with_ranges_and_origdate() {
+        let full = item("@misc{k, title={T}, year={2019}, month={mar}, day={4}}");
+        assert_eq!(date(&full, "issued"), "[[2019, 3, 4]] ");
+        let range = item(
+            "@misc{k, title={T}, date={2019-03/2020-01}, origdate={1905}, urldate={2021-05-06}}",
+        );
+        assert_eq!(date(&range, "issued"), "[[2019, 3], [2020, 1]] ");
+        assert_eq!(date(&range, "original-date"), "[[1905]] ");
+        assert_eq!(date(&range, "accessed"), "[[2021, 5, 6]] ");
+    }
+
+    #[test]
+    fn names_have_particles_literals_suffixes_and_spaced_initials() {
+        let item = item(
+            "@misc{k, title={T}, author={van der Berg, Ludwig and {Copernicus Climate Change Service} \
+             and Smith, Jr., J.G. and Plato}, editor={Doe, Jane}, editortype={director}}",
+        );
+        assert_eq!(
+            names(&item, "author"),
+            [
+                "Berg|Ludwig||van der|",
+                "{Copernicus Climate Change Service}",
+                "Smith|J. G.|||Jr.",
+                "Plato||||",
+            ]
+        );
+        assert_eq!(names(&item, "director"), ["Doe|Jane|||"]);
+        assert!(names(&item, "editor").is_empty());
+    }
+
+    #[test]
+    fn a_useprefix_particle_is_non_dropping() {
+        let item = item(
+            "@misc{k, title={T}, author={family=Berg, given=Ludwig, prefix=van der, useprefix=true}}",
+        );
+        assert_eq!(names(&item, "author"), ["Berg|Ludwig|van der||"]);
+    }
+
+    #[test]
+    fn a_web_page_keeps_its_site_and_an_eprint_gives_a_url() {
+        // BibLaTeX lists `organization` with "and"; braces keep a name whole.
+        let page = item(
+            "@online{k, title={T}, organization={{Hyperbole and a Half}}, url={https://x.org}}",
+        );
+        assert_eq!(string(&page, "publisher"), Some("Hyperbole and a Half"));
+        assert_eq!(string(&page, "URL"), Some("https://x.org"));
+        let arxiv = item("@misc{k, title={T}, eprint={2101.00001}, eprinttype={arXiv}}");
+        assert_eq!(
+            string(&arxiv, "URL"),
+            Some("https://arxiv.org/abs/2101.00001")
+        );
+        let magazine = item(
+            "@article{k, title={T}, entrysubtype={magazine}, note={N}, addendum={A}, \
+             langid={german}, keywords={a, b}}",
+        );
+        assert_eq!(string(&magazine, "type"), Some("article-magazine"));
+        assert_eq!(string(&magazine, "note"), Some("N. A"));
+        assert_eq!(string(&magazine, "language"), Some("de-DE"));
+        assert_eq!(string(&magazine, "keyword"), Some("a, b"));
+    }
+
+    #[test]
+    fn a_chapter_has_its_book_as_container_once() {
+        let chapter = item(
+            "@incollection{k, title={T}, booktitle={Bioinformatics}, bookauthor={Doe, Jane}, \
+             publisher={P}, address={Berlin}, chapter={3}, edition={2}}",
+        );
+        assert_eq!(string(&chapter, "container-title"), Some("Bioinformatics"));
+        assert_eq!(string(&chapter, "publisher-place"), Some("Berlin"));
+        assert_eq!(string(&chapter, "chapter-number"), Some("3"));
+        assert_eq!(string(&chapter, "edition"), Some("2"));
+        assert_eq!(names(&chapter, "container-author"), ["Doe|Jane|||"]);
+        let volume = item("@book{k, title={Vol. 2}, maintitle={Collected Works}, volume={2}}");
+        assert_eq!(string(&volume, "title"), Some("Collected Works"));
+        assert_eq!(string(&volume, "volume-title"), Some("Vol. 2"));
+    }
+
+    #[test]
+    fn latex_conventions_become_text() {
+        let item = item(
+            "@misc{k, title={Caf\\'e {NASA} --- a tale, 1--2 \\& more~here}, author={M\\\"uller, Hans}}",
+        );
+        assert_eq!(
+            string(&item, "title"),
+            Some("Café NASA \u{2014} a tale, 1\u{2013}2 & more\u{a0}here")
+        );
+        assert_eq!(names(&item, "author"), ["Müller|Hans|||"]);
+    }
+}
