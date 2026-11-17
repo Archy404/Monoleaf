@@ -11,8 +11,6 @@ import {
   resetReferencesForTests,
   syncReferences,
   type References,
-  formatMix,
-  formatMixNote,
 } from "./references";
 
 const found = {
@@ -100,41 +98,6 @@ describe("syncReferences", () => {
       warnings: ["references: Error: no backend"],
       sources: [],
     });
-  });
-});
-
-describe("formatMix", () => {
-  const entry = (key: string, format: "bib" | "csl") => ({
-    key,
-    format,
-    authors: [],
-    year: null,
-    title: "",
-  });
-  const refs = (...entries: ReturnType<typeof entry>[]): References => ({
-    entries,
-    warnings: [],
-    sources: [],
-  });
-
-  it("is none with one format, however the text cites", () => {
-    expect(
-      formatMix(refs(entry("a", "bib"), entry("b", "bib")), ["a", "b"]),
-    ).toBe("none");
-    expect(formatMix(refs(), ["a"])).toBe("none");
-  });
-
-  it("is sources when the header mixes but the text cites one format", () => {
-    const mixed = refs(entry("a", "bib"), entry("b", "csl"));
-    expect(formatMix(mixed, ["a", "a", "nobody"])).toBe("sources");
-    expect(formatMix(mixed, [])).toBe("sources");
-  });
-
-  it("is cited when the text cites both formats", () => {
-    const mixed = refs(entry("a", "bib"), entry("b", "csl"));
-    expect(formatMix(mixed, ["b", "a"])).toBe("cited");
-    expect(formatMixNote("cited")).toContain("not told apart");
-    expect(formatMixNote("none")).toBeNull();
   });
 });
 

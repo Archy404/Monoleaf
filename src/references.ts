@@ -21,43 +21,6 @@ export interface ReferenceSummary {
  * YAML file, the header's `references:` list). */
 export type ReferenceFormat = "bib" | "csl";
 
-/**
- * How a document mixes the two formats. The backend renders each format in
- * a run of its own, so "sources" is a caution and "cited" a degraded export:
- * numbered and listed one format after the other, and two works that cite
- * alike are not told apart.
- */
-export type FormatMix = "none" | "sources" | "cited";
-
-export function formatMix(
-  refs: References,
-  citedKeys: Iterable<string>,
-): FormatMix {
-  const byKey = new Map<string, ReferenceFormat>();
-  for (const entry of refs.entries) {
-    if (!byKey.has(entry.key)) byKey.set(entry.key, entry.format);
-  }
-  if (new Set(byKey.values()).size < 2) return "none";
-  const cited = new Set<ReferenceFormat>();
-  for (const key of citedKeys) {
-    const format = byKey.get(key);
-    if (format !== undefined) cited.add(format);
-  }
-  return cited.size === 2 ? "cited" : "sources";
-}
-
-/** The panel's line for a mix, null when there is none. */
-export function formatMixNote(mix: FormatMix): string | null {
-  switch (mix) {
-    case "none":
-      return null;
-    case "sources":
-      return ".bib and CSL references together: the export renders each format in a run of its own";
-    case "cited":
-      return "the text cites .bib and CSL references: the export numbers and lists each format on its own, and two works that cite alike are not told apart";
-  }
-}
-
 /** Where entries came from: `references:` for the inline list, else the
  * path as written in the header; zero entries where the source failed. */
 export interface Source {

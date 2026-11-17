@@ -53,7 +53,6 @@ import {
   toDocumentLineBreaks,
 } from "./document";
 import { citationCompletion, citationHover } from "./citations";
-import { findCitations } from "./citationsyntax";
 import { refreshLiveCitations } from "./livecitations";
 import {
   applyMeta,
@@ -68,8 +67,6 @@ import {
   forgetLoadedReferences,
   referencesLabel,
   syncReferences,
-  formatMix,
-  formatMixNote,
 } from "./references";
 import { PortabilityMode, portabilityExtensions } from "./portability";
 import { livePreviewExtensions } from "./livepreview";
@@ -561,7 +558,7 @@ const referencesStatus = document.getElementById(
 const referencesPanel = document.getElementById("references-panel")!;
 
 /** What the last rendering of the document's citations warned about: an
- * unknown key, a mix of formats. Set by every export and page measurement. */
+ * unknown key, a date that is none. Set by every export and page measurement. */
 let exportWarnings: readonly string[] = [];
 
 /** The status-bar entry follows the loaded list; absent without references. */
@@ -577,31 +574,13 @@ function refreshReferencesStatus() {
   referencesStatus.textContent = label;
   const warned = refs.warnings.length > 0 || exportWarnings.length > 0;
   referencesStatus.classList.toggle("has-warnings", warned);
-  // Amber when the header mixes .bib and CSL, red once the text cites both:
-  // the export then numbers and lists each format on its own.
-  const mix = formatMix(refs, citedKeys());
-  referencesStatus.classList.toggle("mixed-sources", mix === "sources");
-  referencesStatus.classList.toggle("mixed-cited", mix === "cited");
   if (referencesStatus.hidden) toggleReferencesPanel(false);
   else if (!referencesPanel.hidden) renderReferencesPanel();
-}
-
-/** Every key the document cites, in order, repeats included. */
-function citedKeys(): string[] {
-  const citations = findCitations(view.state.doc.toString());
-  return citations.flatMap((c) => c.items.map((item) => item.key));
 }
 
 // Text only: a source name or warning comes from a file the document names.
 function renderReferencesPanel() {
   referencesPanel.replaceChildren();
-  const note = formatMixNote(formatMix(currentReferences(), citedKeys()));
-  if (note !== null) {
-    const row = document.createElement("div");
-    row.className = "references-source warning";
-    row.textContent = note;
-    referencesPanel.append(row);
-  }
   for (const line of describeSources(currentReferences())) {
     const row = document.createElement("div");
     row.className = "references-source";
