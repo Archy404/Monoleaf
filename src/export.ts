@@ -363,6 +363,82 @@ type CitationEnv = {
   renderedCitations?: readonly (string | null)[];
 };
 
+/** What the backend renders for a document's citations. COUPLED:
+ * `RenderedCitations` in src-tauri/src/citations.rs. */
+export interface RenderedCitations {
+  /** One per citation found; null where it stays as written. */
+  citations: readonly (string | null)[];
+  bibliography: readonly { key: string; label: string | null; html: string }[];
+  hangingIndent: boolean;
+  /** The heading over the list, from `reference-section-title:`. */
+  title: string | null;
+  warnings: readonly string[];
+}
+
+export type CitationRenderer = (
+  citations: readonly ParsedCitation[],
+) => Promise<RenderedCitations>;
+
+type Token = ReturnType<InstanceType<typeof MarkdownIt>["parse"]>[number];
+
+/** The reference list as pandoc prints it: `#refs` with one `csl-entry` per
+ * work, a numeric style's label in a left margin. Empty without entries. */
+function referenceListHtml(
+  rendered: RenderedCitations,
+  escape: (text: string) => string,
+): string {
+  if (rendered.bibliography.length === 0) return "";
+  const entries = rendered.bibliography.map(({ key, label, html }) => {
+    const body =
+      label === null
+        ? html
+        : `<div class="csl-left-margin">${label}</div>` +
+          `<div class="csl-right-inline">${html}</div>`;
+    return `<div id="ref-${escape(key)}" class="csl-entry" role="listitem">${body}</div>`;
+  });
+  const title =
+    rendered.title === null
+      ? ""
+      : `<h2 class="references-title">${escape(rendered.title)}</h2>\n`;
+  const classes = rendered.hangingIndent
+    ? "references csl-bib-body hanging-indent"
+    : "references csl-bib-body";
+  return `${title}<div id="refs" class="${classes}" role="list">\n${entries.join("\n")}\n</div>\n`;
+}
+
+/**
+ * Put the list where pandoc puts it: in place of a `::: {#refs}` block, which
+ * never prints, else at the end of the document, before the footnotes.
+ */
+function placeReferenceList(tokens: Token[], html: string): void {
+  const first = tokens[0];
+  if (first === undefined) return;
+  const Ctor = first.constructor as new (
+    t: string,
+    g: string,
+    n: number,
+  ) => Token;
+  const block = new Ctor("html_block", "", 0);
+  block.content = html;
+  const marker = tokens.findIndex(
+    (token, i) =>
+      token.type === "paragraph_open" &&
+      /^:::\s*\{#refs\}\s*(\n:::\s*)?$/.test(tokens[i + 1]?.content ?? ""),
+  );
+  if (marker !== -1) {
+    // `:::` on its own paragraph closes a block whose opener stood alone.
+    const closes =
+      !/\n:::\s*$/.test(tokens[marker + 1].content) &&
+      tokens[marker + 3]?.type === "paragraph_open" &&
+      tokens[marker + 4]?.content.trim() === ":::";
+    tokens.splice(marker, closes ? 6 : 3, block);
+    return;
+  }
+  if (html === "") return;
+  const footnotes = tokens.findIndex((t) => t.type === "footnote_block_open");
+  tokens.splice(footnotes === -1 ? tokens.length : footnotes, 0, block);
+}
+
 /**
  * Pandoc citations, `[@key]` and `@key`, as their own inline token, so the
  * export can collect them after the parse, have the backend render them and
@@ -705,13 +781,28 @@ export async function renderDocumentHtmlAsync(
   loadImages: (
     sources: readonly string[],
   ) => Promise<ReadonlyMap<string, string>>,
+  renderCitations?: CitationRenderer,
 ): Promise<string> {
   const { md, text } = buildRenderer(markdown, mode, sourceLines);
-  const env: RenderEnv = { localImages: NO_LOCAL_IMAGES };
+  const env: RenderEnv & CitationEnv = { localImages: NO_LOCAL_IMAGES };
   const tokens = md.parse(text, env);
   const sources = collectImageSources(tokens);
-  const images =
-    sources.length === 0 ? NO_LOCAL_IMAGES : await loadImages(sources);
+  const cited = env.citations ?? [];
+  // Images and citations load side by side; each is skipped when the
+  // document has none, so the common case costs nothing extra.
+  const [images, rendered] = await Promise.all([
+    sources.length === 0 ? NO_LOCAL_IMAGES : loadImages(sources),
+    cited.length === 0 || renderCitations === undefined
+      ? null
+      : renderCitations(cited),
+  ]);
+  if (rendered !== null) {
+    env.renderedCitations = rendered.citations;
+    placeReferenceList(
+      tokens,
+      referenceListHtml(rendered, md.utils.escapeHtml),
+    );
+  }
   return renderTokens(md, tokens, env, images, sourceLines);
 }
 

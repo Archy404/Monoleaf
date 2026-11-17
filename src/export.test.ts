@@ -201,6 +201,83 @@ describe("renderDocumentHtml", () => {
     expect(html).toContain("a b c");
   });
 
+  it("renders citations through the backend and places the list at #refs", async () => {
+    const doc = "Text [@a, p. 3] and @b.\n\n::: {#refs}\n:::\n\nAfter.\n";
+    const asked: string[][] = [];
+    const html = await renderDocumentHtmlAsync(
+      doc,
+      "strict",
+      false,
+      () => Promise.resolve(new Map()),
+      (citations) => {
+        asked.push(citations.map((c) => c.items.map((i) => i.key).join("+")));
+        return Promise.resolve({
+          citations: ["(Doe 2020, 3)", null],
+          bibliography: [
+            { key: "a", label: null, html: "Doe. 2020. <i>A</i>." },
+          ],
+          hangingIndent: true,
+          title: "References",
+          warnings: [],
+        });
+      },
+    );
+    expect(asked).toEqual([["a", "b"]]);
+    expect(html).toContain(
+      '<span class="citation">(Doe 2020, 3)</span> and @b.',
+    );
+    expect(html).not.toContain(":::");
+    const list = html.indexOf('<h2 class="references-title">References</h2>');
+    expect(list).toBeGreaterThan(html.indexOf("Text"));
+    expect(list).toBeLessThan(html.indexOf("After."));
+    expect(html).toContain(
+      '<div id="refs" class="references csl-bib-body hanging-indent" role="list">',
+    );
+    expect(html).toContain(
+      '<div id="ref-a" class="csl-entry" role="listitem">Doe. 2020. <i>A</i>.</div>',
+    );
+  });
+
+  it("puts the list before the footnotes when the document has no #refs block", async () => {
+    const doc = "See [@a][^1].\n\n[^1]: Note\n";
+    const html = await renderDocumentHtmlAsync(
+      doc,
+      "strict",
+      false,
+      () => Promise.resolve(new Map()),
+      () =>
+        Promise.resolve({
+          citations: ["[1]"],
+          bibliography: [{ key: "a", label: "[1]", html: "J. Doe, 2020." }],
+          hangingIndent: false,
+          title: null,
+          warnings: [],
+        }),
+    );
+    expect(html).not.toContain("references-title");
+    expect(html).toContain(
+      '<div class="csl-left-margin">[1]</div><div class="csl-right-inline">J. Doe, 2020.</div>',
+    );
+    expect(html.indexOf('id="refs"')).toBeLessThan(
+      html.indexOf('class="footnotes'),
+    );
+  });
+
+  it("does not ask the backend for a document without citations", async () => {
+    let calls = 0;
+    await renderDocumentHtmlAsync(
+      "Mail jane@doe.org.\n",
+      "strict",
+      false,
+      () => Promise.resolve(new Map()),
+      () => {
+        calls++;
+        return Promise.reject(new Error("not expected"));
+      },
+    );
+    expect(calls).toBe(0);
+  });
+
   it("prints a citation as written until the backend renders it", () => {
     const doc = "See [@doe2020, p. 3] and @roe, or mail jane@doe.org.\n";
     const html = renderDocumentHtml(doc, "strict");
