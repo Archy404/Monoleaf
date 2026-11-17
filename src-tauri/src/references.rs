@@ -26,6 +26,43 @@ pub struct References {
     pub warnings: Vec<String>,
 }
 
+/// A reference as its source gave it: hayagriva's entry for a `.bib` file, a
+/// CSL item for JSON and YAML. Both render through hayagriva, and the summary
+/// the editor shows is derived from either.
+#[derive(Clone, Debug)]
+pub enum Reference {
+    // Boxed: an entry is many times the size of an item, and a list of
+    // references should not pay the larger size for every item.
+    Bib(Box<hayagriva::Entry>),
+    Csl(Item),
+}
+
+impl Reference {
+    pub fn summary(&self) -> ReferenceSummary {
+        match self {
+            Reference::Bib(entry) => summarize(entry),
+            Reference::Csl(item) => summarize_item(&item.id().unwrap_or_default(), item),
+        }
+    }
+}
+
+/// What a source gave in full: the references, and a warning per skipped entry.
+#[derive(Clone, Debug, Default)]
+pub struct Read {
+    pub references: Vec<Reference>,
+    pub warnings: Vec<String>,
+}
+
+impl Read {
+    /// The editor's view of it: summaries only.
+    pub fn summaries(self) -> References {
+        References {
+            entries: self.references.iter().map(Reference::summary).collect(),
+            warnings: self.warnings,
+        }
+    }
+}
+
 /// The entries of a `.bib` file, in file order.
 ///
 /// hayagriva reads a file as a whole and refuses all of it over one entry it
@@ -35,14 +72,22 @@ pub struct References {
 /// by entry: what converts is kept, and each entry skipped gives a warning
 /// with its line.
 pub fn references_from_biblatex(text: &str) -> References {
+    read_biblatex(text).summaries()
+}
+
+/// The `.bib` file's entries in full, see references_from_biblatex.
+pub fn read_biblatex(text: &str) -> Read {
     if let Ok(library) = hayagriva::io::from_biblatex_str(text) {
-        let entries = library.iter().map(summarize).collect();
-        return References {
-            entries,
+        let references = library
+            .iter()
+            .map(|entry| Reference::Bib(Box::new(entry.clone())))
+            .collect();
+        return Read {
+            references,
             warnings: Vec::new(),
         };
     }
-    let mut found = References::default();
+    let mut found = Read::default();
     let mut definitions = String::new();
     let mut keys = HashSet::new();
     for (line, chunk) in entry_chunks(text) {
@@ -68,7 +113,7 @@ pub fn references_from_biblatex(text: &str) -> References {
                 continue;
             }
             match hayagriva::Entry::try_from(raw) {
-                Ok(entry) => found.entries.push(summarize(&entry)),
+                Ok(entry) => found.references.push(Reference::Bib(Box::new(entry))),
                 Err(e) => found.warnings.push(format!(
                     "line {}: entry {} skipped, {}",
                     line + line_of(e.span.start, chunk) - 1,
@@ -156,13 +201,23 @@ fn summarize(entry: &hayagriva::Entry) -> ReferenceSummary {
 
 /// The entries of CSL-JSON text, the list of items a reference manager exports.
 pub fn references_from_csl_json(text: &str) -> Result<References, String> {
+    read_csl_json(text).map(Read::summaries)
+}
+
+/// The CSL-JSON items in full, see references_from_csl_json.
+pub fn read_csl_json(text: &str) -> Result<Read, String> {
     let items: Vec<Item> = serde_json::from_str(text).map_err(|e| e.to_string())?;
-    Ok(summarize_items(&items))
+    Ok(collect_items(items))
 }
 
 /// The entries of CSL-YAML text: the `references:` list of a pandoc
 /// bibliography file or of a document's header, or a bare list of items.
 pub fn references_from_csl_yaml(text: &str) -> Result<References, String> {
+    read_csl_yaml(text).map(Read::summaries)
+}
+
+/// The CSL-YAML items in full, see references_from_csl_yaml.
+pub fn read_csl_yaml(text: &str) -> Result<Read, String> {
     use yaml_serde::Value as Yaml;
     let document: Yaml = yaml_serde::from_str(text).map_err(|e| e.to_string())?;
     let list = match document {
@@ -173,7 +228,7 @@ pub fn references_from_csl_yaml(text: &str) -> Result<References, String> {
         Yaml::Null => Vec::new(),
         list => yaml_serde::from_value(list).map_err(|e| e.to_string())?,
     };
-    Ok(summarize_items(&items))
+    Ok(collect_items(items))
 }
 
 /// The files a header names under `bibliography:`, one path or a list of
@@ -337,18 +392,18 @@ pub fn load(document_path: Option<&str>, front_matter: &str, allow_network: bool
     loaded
 }
 
-fn summarize_items(items: &[Item]) -> References {
-    let mut references = References::default();
-    for (index, item) in items.iter().enumerate() {
+fn collect_items(items: Vec<Item>) -> Read {
+    let mut found = Read::default();
+    for (index, item) in items.into_iter().enumerate() {
         // Without an `id` there is nothing to write after `@`.
-        match item.id() {
-            Some(id) => references.entries.push(summarize_item(&id, item)),
-            None => references
-                .warnings
-                .push(format!("entry {} skipped, it has no id", index + 1)),
+        if item.id().is_some() {
+            found.references.push(Reference::Csl(item));
+        } else {
+            let skipped = format!("entry {} skipped, it has no id", index + 1);
+            found.warnings.push(skipped);
         }
     }
-    references
+    found
 }
 
 fn summarize_item(id: &str, item: &Item) -> ReferenceSummary {
