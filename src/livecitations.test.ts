@@ -23,9 +23,11 @@ function stub() {
     calls.push(citations.map((c) => c.items[0].key));
     return Promise.resolve({
       citations: citations.map((c) => ANSWERS[c.items[0].key] ?? null),
-      bibliography: [],
-      hangingIndent: false,
-      title: null,
+      bibliography: [
+        { key: "doe2020", label: "[1]", html: "Doe, J. <i>A Study</i>." },
+      ],
+      hangingIndent: true,
+      title: "References",
       warnings: [],
     });
   };
@@ -117,5 +119,33 @@ describe("live citations", () => {
     expect(shown(view)).toEqual(["(Doe 2020)", "Roe (2019, p. 3)"]);
     await settle();
     expect(calls).toHaveLength(2);
+  });
+
+  it("shows the reference list at the refs block and its source on it", async () => {
+    const doc = "See [@doe2020].\n\n::: {#refs}\n\n:::\n\nAfter.\n";
+    const view = open(doc, stub().render);
+    await settle();
+    const list = view.contentDOM.querySelector(".cm-refs");
+    expect(list?.className).toBe("cm-refs cm-refs-hanging");
+    expect(list?.querySelector(".cm-refs-title")?.textContent).toBe(
+      "References",
+    );
+    expect(list?.querySelector(".cm-refs-entry")?.innerHTML).toBe(
+      '<span class="cm-refs-label">[1]</span><span>Doe, J. <i>A Study</i>.</span>',
+    );
+    expect(view.contentDOM.textContent).not.toContain(":::");
+    view.dispatch({ selection: { anchor: doc.indexOf("#refs") } });
+    expect(view.contentDOM.querySelector(".cm-refs")).toBeNull();
+    expect(view.contentDOM.textContent).toContain("::: {#refs}");
+  });
+
+  it("leaves a refs block alone without a list and when it holds text", async () => {
+    const view = open("No citations.\n\n::: {#refs}\n:::\n", stub().render);
+    await settle();
+    expect(view.contentDOM.querySelector(".cm-refs")).toBeNull();
+    const view2 = open("[@doe2020]\n\n::: {#refs}\ntext\n:::\n", stub().render);
+    view2.dispatch({ selection: { anchor: 0 } });
+    await settle();
+    expect(view2.contentDOM.querySelector(".cm-refs")).toBeNull();
   });
 });

@@ -5,13 +5,15 @@
  * the backend's rendering of the whole document, so numeric styles count in
  * document order; it is kept until the citations or the header change. A
  * key the references do not have stays as typed, marked like a broken link.
- * Citations inside code and in the header are left alone.
+ * Citations inside code and in the header are left alone. A `::: {#refs}`
+ * block shows the reference list the same way, as a block widget.
  */
 import { invoke } from "@tauri-apps/api/core";
 import {
   EditorState,
   RangeSetBuilder,
   StateEffect,
+  StateField,
   type Extension,
 } from "@codemirror/state";
 import {
@@ -26,6 +28,7 @@ import { findCitations, type ParsedCitation } from "./citationsyntax";
 import type { RenderedCitations } from "./export";
 import { getCurrentDocumentPath } from "./localimages";
 import { frontMatter } from "./meta";
+import { sanitizeDocumentHtml } from "./sanitize";
 import { ancestorMatches } from "./syntax";
 
 /** Renders a document's citations with its header; the backend by default. */
@@ -51,7 +54,7 @@ export const refreshLiveCitations = StateEffect.define<null>();
 
 const rendered = StateEffect.define<{
   key: string;
-  answers: readonly (string | null)[];
+  result: RenderedCitations;
 }>();
 
 interface Found {
@@ -79,6 +82,75 @@ function collect(state: EditorState): Found[] {
     }
   }
   return found;
+}
+
+const REFS_OPEN_RE = /^:::\s*\{#refs\}\s*$/;
+const REFS_CLOSE_RE = /^:::\s*$/;
+
+/** The `::: {#refs}` block, opener to closer with only blank lines between,
+ * as the export places the list; null without one. */
+function findRefsBlock(
+  state: EditorState,
+): { from: number; to: number } | null {
+  for (let n = 1; n <= state.doc.lines; n++) {
+    const line = state.doc.line(n);
+    if (!REFS_OPEN_RE.test(line.text)) continue;
+    for (let m = n + 1; m <= state.doc.lines; m++) {
+      const next = state.doc.line(m);
+      if (next.text.trim() === "") continue;
+      if (REFS_CLOSE_RE.test(next.text))
+        return { from: line.from, to: next.to };
+      break;
+    }
+    return null;
+  }
+  return null;
+}
+
+class ReferenceListWidget extends WidgetType {
+  constructor(readonly list: RenderedCitations) {
+    super();
+  }
+  eq(other: ReferenceListWidget) {
+    return (
+      other.list.title === this.list.title &&
+      other.list.hangingIndent === this.list.hangingIndent &&
+      JSON.stringify(other.list.bibliography) ===
+        JSON.stringify(this.list.bibliography)
+    );
+  }
+  toDOM() {
+    const block = document.createElement("div");
+    block.className = this.list.hangingIndent
+      ? "cm-refs cm-refs-hanging"
+      : "cm-refs";
+    if (this.list.title !== null) {
+      const title = document.createElement("div");
+      title.className = "cm-refs-title";
+      title.textContent = this.list.title;
+      block.append(title);
+    }
+    for (const entry of this.list.bibliography) {
+      const row = document.createElement("div");
+      row.className = "cm-refs-entry";
+      if (entry.label !== null) {
+        const label = document.createElement("span");
+        label.className = "cm-refs-label";
+        label.textContent = plainText(entry.label);
+        row.append(label);
+      }
+      const text = document.createElement("span");
+      // The backend's HTML (italics in titles), through the same sanitizer
+      // as the export's HTML before it reaches the app's DOM.
+      text.innerHTML = sanitizeDocumentHtml(entry.html);
+      row.append(text);
+      block.append(row);
+    }
+    return block;
+  }
+  ignoreEvent() {
+    return false;
+  }
 }
 
 class CitationWidget extends WidgetType {
@@ -151,7 +223,7 @@ class LiveCitations {
       for (const effect of tr.effects) {
         if (effect.is(rendered)) {
           this.answeredKey = effect.value.key;
-          this.answers = effect.value.answers;
+          this.answers = effect.value.result.citations;
           this.remember();
           answered = true;
         } else if (effect.is(refreshLiveCitations)) {
@@ -203,9 +275,7 @@ class LiveCitations {
     const citations = this.found.map((f) => f.citation);
     this.render(header, citations).then(
       (result) => {
-        this.view.dispatch({
-          effects: rendered.of({ key, answers: result.citations }),
-        });
+        this.view.dispatch({ effects: rendered.of({ key, result }) });
       },
       () => {
         // The backend refused (an unknown style): the sources stay visible.
@@ -221,32 +291,86 @@ class LiveCitations {
   }
 
   private rebuild() {
-    const decorations = new RangeSetBuilder<Decoration>();
-    const atomics = new RangeSetBuilder<Decoration>();
     const state = this.view.state;
+    const visible = (from: number, to: number) =>
+      this.view.visibleRanges.some((r) => from <= r.to && to >= r.from);
+    const planned: {
+      from: number;
+      to: number;
+      deco: Decoration;
+      atomic: boolean;
+    }[] = [];
     this.found.forEach((f, index) => {
-      if (
-        !this.view.visibleRanges.some((r) => f.from <= r.to && f.to >= r.from)
-      )
-        return;
+      if (!visible(f.from, f.to)) return;
       if (cursorOnLine(state, f.from, f.to)) return;
       const text = this.textFor(index);
       if (text === undefined) return;
       if (text === null) {
-        decorations.add(f.from, f.to, unknownMark);
+        planned.push({
+          from: f.from,
+          to: f.to,
+          deco: unknownMark,
+          atomic: false,
+        });
         return;
       }
       const source = state.doc.sliceString(f.from, f.to);
       const deco = Decoration.replace({
         widget: new CitationWidget(plainText(text), source),
       });
-      decorations.add(f.from, f.to, deco);
-      atomics.add(f.from, f.to, deco);
+      planned.push({ from: f.from, to: f.to, deco, atomic: true });
     });
+    planned.sort((a, b) => a.from - b.from);
+    const decorations = new RangeSetBuilder<Decoration>();
+    const atomics = new RangeSetBuilder<Decoration>();
+    for (const p of planned) {
+      decorations.add(p.from, p.to, p.deco);
+      if (p.atomic) atomics.add(p.from, p.to, p.deco);
+    }
     this.decorations = decorations.finish();
     this.atomics = atomics.finish();
   }
 }
+
+/** The list at the refs block. A block widget must come from a state field,
+ * not a view plugin; the field keeps the last list the backend rendered and
+ * replaces the block's lines unless the cursor is on them. */
+const referenceList = StateField.define<{
+  list: RenderedCitations | null;
+  block: { from: number; to: number } | null;
+  decorations: DecorationSet;
+}>({
+  create: (state) => ({
+    list: null,
+    block: findRefsBlock(state),
+    decorations: Decoration.none,
+  }),
+  update(value, tr) {
+    let { list, block } = value;
+    for (const effect of tr.effects) {
+      if (effect.is(rendered)) list = effect.value.result;
+    }
+    if (tr.docChanged) block = findRefsBlock(tr.state);
+    let decorations = Decoration.none;
+    if (
+      list !== null &&
+      block !== null &&
+      list.bibliography.length > 0 &&
+      !cursorOnLine(tr.state, block.from, block.to)
+    ) {
+      const deco = Decoration.replace({
+        widget: new ReferenceListWidget(list),
+        block: true,
+      });
+      decorations = Decoration.set([deco.range(block.from, block.to)]);
+    }
+    return { list, block, decorations };
+  },
+  provide: (field) => [
+    EditorView.decorations.from(field, (value) => value.decorations),
+    EditorView.atomicRanges.of((view) => view.state.field(field).decorations),
+  ],
+});
 
 function sourceOf(found: Found): string {
   return JSON.stringify(found.citation.items) + String(found.citation.inText);
@@ -263,6 +387,7 @@ export function liveCitations(
   );
   return [
     plugin,
+    referenceList,
     EditorView.atomicRanges.of(
       (view) => view.plugin(plugin)?.atomics ?? Decoration.none,
     ),
