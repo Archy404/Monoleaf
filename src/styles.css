@@ -373,6 +373,18 @@ html.theme-dark .brand-dark {
   margin-right: 0.35em;
 }
 
+/* Live citations: the rendering reads as text; a dotted edge says it is a
+   widget whose source returns on its line. An unknown key keeps its source
+   under a dashed accent edge, like a missing image. */
+.cm-citation {
+  cursor: text;
+  border-bottom: 1px dotted light-dark(#b9b8b4, #565650);
+}
+.cm-citation-unknown {
+  text-decoration: underline dashed var(--accent);
+  text-underline-offset: 3px;
+}
+
 /* Rendered math (KaTeX) in the live view */
 .cm-math {
   cursor: default;
