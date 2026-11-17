@@ -3,6 +3,7 @@
 //! The editor offers them after `@` and shows one on hover, so what leaves
 //! this module is a short summary per entry, the same for every source format.
 
+use crate::biblatex_csl;
 use hayagriva::citationberg::json::{DateValue, FixedDateRange, Item, NameValue, Value};
 use std::collections::HashSet;
 use std::fs;
@@ -20,8 +21,7 @@ pub struct ReferenceSummary {
     pub format: ReferenceFormat,
 }
 
-/// What a reference was read from. The export renders each format in a run
-/// of its own, so the editor tells the user when a document mixes them.
+/// What a reference was read from; the editor's summary says it.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize)]
 #[serde(rename_all = "lowercase")]
 pub enum ReferenceFormat {
@@ -38,23 +38,22 @@ pub struct References {
     pub warnings: Vec<String>,
 }
 
-/// A reference as its source gave it: hayagriva's entry for a `.bib` file, a
-/// CSL item for JSON and YAML. Both render through hayagriva, and the summary
-/// the editor shows is derived from either.
+/// A reference as a CSL item, whatever it was read from: JSON and YAML hold
+/// items, a `.bib` entry converts to one (biblatex_csl).
 #[derive(Clone, Debug)]
-pub enum Reference {
-    // Boxed: an entry is many times the size of an item, and a list of
-    // references should not pay the larger size for every item.
-    Bib(Box<hayagriva::Entry>),
-    Csl(Item),
+pub struct Reference {
+    pub item: Item,
+    pub format: ReferenceFormat,
 }
 
 impl Reference {
+    /// The citation key, the item's `id`.
+    pub fn key(&self) -> String {
+        self.item.id().unwrap_or_default().into_owned()
+    }
+
     pub fn summary(&self) -> ReferenceSummary {
-        match self {
-            Reference::Bib(entry) => summarize(entry),
-            Reference::Csl(item) => summarize_item(&item.id().unwrap_or_default(), item),
-        }
+        summarize_item(&self.key(), &self.item, self.format)
     }
 }
 
@@ -77,27 +76,20 @@ impl Read {
 
 /// The entries of a `.bib` file, in file order.
 ///
-/// hayagriva reads a file as a whole and refuses all of it over one entry it
+/// The parser reads a file as a whole and refuses all of it over one entry it
 /// cannot take. Real files have such entries (Crossref exports `month = July`
-/// and repeats keys, authors write `year = {in press}`), and an editor is
-/// better served by the rest of the library. So the file is then read entry
-/// by entry: what converts is kept, and each entry skipped gives a warning
-/// with its line.
+/// and repeats keys), and an editor is better served by the rest of the
+/// library. So the file is then read entry by entry: what parses is kept,
+/// and each entry skipped gives a warning with its line.
 pub fn references_from_biblatex(text: &str) -> References {
     read_biblatex(text).summaries()
 }
 
 /// The `.bib` file's entries in full, see references_from_biblatex.
 pub fn read_biblatex(text: &str) -> Read {
-    if let Ok(library) = hayagriva::io::from_biblatex_str(text) {
-        let references = library
-            .iter()
-            .map(|entry| Reference::Bib(Box::new(entry.clone())))
-            .collect();
-        return Read {
-            references,
-            warnings: Vec::new(),
-        };
+    if let Ok(bibliography) = biblatex::Bibliography::parse(text) {
+        let items = bibliography.iter().map(biblatex_csl::item_of).collect();
+        return collect_items(items, ReferenceFormat::Bib);
     }
     let mut found = Read::default();
     let mut definitions = String::new();
@@ -124,15 +116,12 @@ pub fn read_biblatex(text: &str) -> Read {
                 ));
                 continue;
             }
-            match hayagriva::Entry::try_from(raw) {
-                Ok(entry) => found.references.push(Reference::Bib(Box::new(entry))),
-                Err(e) => found.warnings.push(format!(
-                    "line {}: entry {} skipped, {}",
-                    line + line_of(e.span.start, chunk) - 1,
-                    raw.key,
-                    e.kind
-                )),
-            }
+            let mut item = biblatex_csl::item_of(raw);
+            normalise_dates(&mut item, found.references.len(), &mut found.warnings);
+            found.references.push(Reference {
+                item,
+                format: ReferenceFormat::Bib,
+            });
         }
     }
     found
@@ -197,21 +186,6 @@ fn parse_chunk(
     None
 }
 
-fn summarize(entry: &hayagriva::Entry) -> ReferenceSummary {
-    ReferenceSummary {
-        format: ReferenceFormat::Bib,
-        key: entry.key().to_string(),
-        authors: entry
-            .authors()
-            .unwrap_or_default()
-            .iter()
-            .map(|person| person.name_first(false, false))
-            .collect(),
-        year: entry.date().map(|date| date.year),
-        title: entry.title().map(ToString::to_string).unwrap_or_default(),
-    }
-}
-
 /// The entries of CSL-JSON text, the list of items a reference manager exports.
 pub fn references_from_csl_json(text: &str) -> Result<References, String> {
     read_csl_json(text).map(Read::summaries)
@@ -220,7 +194,7 @@ pub fn references_from_csl_json(text: &str) -> Result<References, String> {
 /// The CSL-JSON items in full, see references_from_csl_json.
 pub fn read_csl_json(text: &str) -> Result<Read, String> {
     let items: Vec<Item> = serde_json::from_str(text).map_err(|e| e.to_string())?;
-    Ok(collect_items(items))
+    Ok(collect_items(items, ReferenceFormat::Csl))
 }
 
 /// The entries of CSL-YAML text: the `references:` list of a pandoc
@@ -241,7 +215,7 @@ pub fn read_csl_yaml(text: &str) -> Result<Read, String> {
         Yaml::Null => Vec::new(),
         list => yaml_serde::from_value(list).map_err(|e| e.to_string())?,
     };
-    Ok(collect_items(items))
+    Ok(collect_items(items, ReferenceFormat::Csl))
 }
 
 /// The files a header names under `bibliography:`, one path or a list of
@@ -434,13 +408,13 @@ pub fn load_references(
     loaded
 }
 
-fn collect_items(items: Vec<Item>) -> Read {
+fn collect_items(items: Vec<Item>, format: ReferenceFormat) -> Read {
     let mut found = Read::default();
     for (index, mut item) in items.into_iter().enumerate() {
         normalise_dates(&mut item, index, &mut found.warnings);
         // Without an `id` there is nothing to write after `@`.
         if item.id().is_some() {
-            found.references.push(Reference::Csl(item));
+            found.references.push(Reference { item, format });
         } else {
             let skipped = format!("entry {} skipped, it has no id", index + 1);
             found.warnings.push(skipped);
@@ -449,14 +423,14 @@ fn collect_items(items: Vec<Item>) -> Read {
     found
 }
 
-fn summarize_item(id: &str, item: &Item) -> ReferenceSummary {
+fn summarize_item(id: &str, item: &Item, format: ReferenceFormat) -> ReferenceSummary {
     let authors = match item.0.get("author") {
         Some(Value::Names(names)) => names.iter().map(name_first).collect(),
         _ => Vec::new(),
     };
     let title = item.0.get("title").and_then(Value::to_str);
     ReferenceSummary {
-        format: ReferenceFormat::Csl,
+        format,
         key: id.to_string(),
         authors,
         year: item.0.get("issued").and_then(year_of),
@@ -464,12 +438,15 @@ fn summarize_item(id: &str, item: &Item) -> ReferenceSummary {
     }
 }
 
-/// Family name first, as for a `.bib` entry.
+/// Family name first, "van der Roe, Richard", whichever kind its particle is.
 fn name_first(name: &NameValue) -> String {
     match name {
         NameValue::Literal(name) => name.literal.clone(),
         NameValue::Item(name) => {
-            let particle = name.non_dropping_particle.as_deref();
+            let particle = name
+                .non_dropping_particle
+                .as_deref()
+                .or(name.dropping_particle.as_deref());
             let family = particle.map_or(name.family.clone(), |p| format!("{p} {}", name.family));
             name.given
                 .as_ref()
@@ -501,7 +478,12 @@ fn normalise_dates(item: &mut Item, index: usize, warnings: &mut Vec<String>) {
         let range = match value {
             Value::Number(year) => year.to_string().parse::<FixedDateRange>().ok(),
             Value::String(text) => text.parse::<FixedDateRange>().ok(),
-            Value::Date(date) => FixedDateRange::try_from(date.clone()).ok(),
+            Value::Date(date) => match FixedDateRange::try_from(date.clone()) {
+                Ok(range) => Some(range),
+                // A literal date, `{literal: in press}`, has no parts to take.
+                Err(()) if literal_of(date).is_some() => continue,
+                Err(()) => None,
+            },
             Value::Names(_) => None,
         };
         let Some(mut range) = range else {
@@ -520,6 +502,13 @@ fn normalise_dates(item: &mut Item, index: usize, warnings: &mut Vec<String>) {
             literal: None,
             season: None,
         });
+    }
+}
+
+/// The literal text of a date, where it has one.
+fn literal_of(date: &DateValue) -> Option<&str> {
+    match date {
+        DateValue::Raw { literal, .. } | DateValue::DateParts { literal, .. } => literal.as_deref(),
     }
 }
 
@@ -584,14 +573,13 @@ mod tests {
     }
 
     #[test]
-    fn an_entry_that_cannot_be_read_is_skipped_with_a_warning() {
+    fn an_entry_with_in_press_as_its_year_is_kept_without_a_year() {
         let odd = "@article{odd,\n  title = {T},\n  year = {in press},\n}\n";
         let found = references_from_biblatex(&format!("{SAMPLE}{odd}"));
-        assert_eq!(found.entries.len(), 3);
-        assert_eq!(
-            found.warnings,
-            ["line 16: entry odd skipped, wrong number of digits"]
-        );
+        assert_eq!(found.entries.len(), 4);
+        assert_eq!(found.entries[3].year, None);
+        assert!(found.warnings.is_empty(), "{:?}", found.warnings);
+        assert!(found.warnings.is_empty());
     }
 
     #[test]
@@ -791,10 +779,7 @@ mod tests {
         let text = "references:\n- id: a\n  issued: 2019\n- id: b\n  issued: 2019/2021\n\
                     - id: c\n  issued: soon\n";
         let read = read_csl_yaml(text).unwrap();
-        let issued = |n: usize| match &read.references[n] {
-            Reference::Csl(item) => item.0.get("issued").cloned(),
-            Reference::Bib(_) => None,
-        };
+        let issued = |n: usize| read.references[n].item.0.get("issued").cloned();
         assert!(matches!(issued(0), Some(Value::Date(_))));
         assert_eq!(year_of(&issued(1).unwrap()), Some(2019));
         assert_eq!(issued(2), Some(Value::String("soon".into())));

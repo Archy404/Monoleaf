@@ -282,20 +282,8 @@ fn html_of(child: &ElemChild) -> String {
     out
 }
 
-fn key_of(reference: &Reference) -> String {
-    match reference {
-        Reference::Bib(entry) => entry.key().to_string(),
-        Reference::Csl(item) => item.id().unwrap_or_default().into_owned(),
-    }
-}
-
-/// Renders the citations in document order and the reference list.
-///
-/// hayagriva drives one entry type per run and keeps the trait that could
-/// join the two private, so the `.bib` references go through one run and the
-/// CSL references through a second one that continues the numbering. That
-/// loses numbering by first appearance, one sorted list and disambiguation
-/// across the two sets; a citation grouping both kinds stays as written.
+/// Renders the citations in document order and the reference list, in one
+/// hayagriva run over every reference.
 pub fn render(
     references: &[Reference],
     style: &IndependentStyle,
@@ -308,7 +296,7 @@ pub fn render(
     };
     let mut by_key = HashMap::new();
     for reference in references {
-        by_key.entry(key_of(reference)).or_insert(reference);
+        by_key.entry(reference.key()).or_insert(&reference.item);
     }
     let locales = locales();
     let terms = locator_terms(&locales, locale);
@@ -322,16 +310,13 @@ pub fn render(
                 .collect()
         })
         .collect();
-    let mut bib = Vec::new();
-    let mut csl = Vec::new();
+    let mut cited = Vec::new();
     for (index, citation) in citations.iter().enumerate() {
-        let mut entries = Vec::new();
         let mut items = Vec::new();
         let mut known = true;
         for item in &citation.items {
             match by_key.get(&item.key) {
-                Some(Reference::Bib(entry)) => entries.push((entry.as_ref(), item)),
-                Some(Reference::Csl(csl_item)) => items.push((csl_item, item)),
+                Some(reference) => items.push((*reference, item)),
                 None => {
                     out.warnings.push(format!(
                         "citation {}: no reference has the key {}",
@@ -358,68 +343,48 @@ pub fn render(
                 index + 1
             ));
         }
-        match (known, entries.is_empty(), items.is_empty()) {
-            (true, false, true) => bib.push((index, entries)),
-            (true, true, false) => csl.push((index, items)),
-            (true, false, false) => out.warnings.push(format!(
-                "citation {}: a .bib and a CSL reference in one citation cannot be rendered together",
-                index + 1
-            )),
-            _ => {}
+        if known {
+            cited.push((index, items));
         }
     }
-    // The same run for both entry types; a macro, since the type that would
-    // make this a generic function is hayagriva's private trait.
-    macro_rules! run {
-        ($cited:expr, $offset:expr) => {{
-            let mut driver = BibliographyDriver::new().with_citation_number_offset($offset);
-            for (index, entries) in &$cited {
-                let items = entries
-                    .iter()
-                    .map(|(entry, cited)| {
-                        let citation = &citations[*index];
-                        let locator = split_locator(&cited.suffix, &terms).0;
-                        let item = CitationItem::with_locator(*entry, locator);
-                        match citation.in_text || suppresses_author(citation, style) {
-                            true => item.kind(CitePurpose::Prose),
-                            false => item,
-                        }
-                    })
-                    .collect();
-                let request =
-                    CitationRequest::new(items, style, Some(locale.clone()), &locales, None);
-                driver.citation(request);
-            }
-            let request = BibliographyRequest::new(style, Some(locale.clone()), &locales);
-            let rendered = driver.finish(request);
-            for ((index, _), citation) in $cited.iter().zip(rendered.citations) {
-                let text = html(&citation.citation);
-                let text = decorate(text, &citations[*index], &suffixes[*index], style);
-                out.citations[*index] = Some(text);
-            }
-            if let Some(list) = rendered.bibliography {
-                out.hanging_indent = list.hanging_indent;
-                out.bibliography
-                    .extend(list.items.into_iter().map(|item| BibliographyEntry {
-                        key: item.key,
-                        label: item.first_field.as_ref().map(html_of),
-                        html: html(&item.content),
-                    }));
-            }
-        }};
+    if cited.is_empty() {
+        return out;
     }
-    if !bib.is_empty() {
-        run!(bib, 0);
+    let mut driver = BibliographyDriver::new();
+    for (index, items) in &cited {
+        let citation = &citations[*index];
+        let items = items
+            .iter()
+            .map(|(reference, cited)| {
+                let locator = split_locator(&cited.suffix, &terms).0;
+                let item = CitationItem::with_locator(*reference, locator);
+                match citation.in_text || suppresses_author(citation, style) {
+                    true => item.kind(CitePurpose::Prose),
+                    false => item,
+                }
+            })
+            .collect();
+        let request = CitationRequest::new(items, style, Some(locale.clone()), &locales, None);
+        driver.citation(request);
     }
-    if !csl.is_empty() {
-        if !bib.is_empty() {
-            out.warnings.push(
-                "the document cites .bib and CSL references: each format is numbered and listed \
-                 on its own, and two works that cite alike are not told apart"
-                    .into(),
-            );
-        }
-        run!(csl, out.bibliography.len());
+    let request = BibliographyRequest::new(style, Some(locale.clone()), &locales);
+    let rendered = driver.finish(request);
+    for ((index, _), citation) in cited.iter().zip(rendered.citations) {
+        let text = html(&citation.citation);
+        let text = decorate(text, &citations[*index], &suffixes[*index], style);
+        out.citations[*index] = Some(text);
+    }
+    if let Some(list) = rendered.bibliography {
+        out.hanging_indent = list.hanging_indent;
+        out.bibliography = list
+            .items
+            .into_iter()
+            .map(|item| BibliographyEntry {
+                key: item.key,
+                label: item.first_field.as_ref().map(html_of),
+                html: html(&item.content),
+            })
+            .collect();
     }
     out
 }
@@ -527,7 +492,7 @@ mod tests {
     }
 
     #[test]
-    fn bib_and_csl_references_are_numbered_one_after_the_other() {
+    fn bib_and_csl_references_share_one_numbering() {
         let mut references = read_biblatex(BIB).references;
         references.extend(read_csl_yaml(ISSUE_EXAMPLE).unwrap().references);
         let mut page = cite(&["doe2020"]);
@@ -540,17 +505,14 @@ mod tests {
         ];
         let style = style_named(Some("ieee")).unwrap();
         let out = render(&references, &style, &locale_named(None, &style), &cited);
-        assert_eq!(out.citations[0].as_deref(), Some("[2]"));
-        assert_eq!(out.citations[1].as_deref(), Some("[1, p. 3]"));
-        assert_eq!((&out.citations[2], &out.citations[3]), (&None, &None));
-        let labels: Vec<_> = out
-            .bibliography
-            .iter()
-            .map(|e| e.label.as_deref())
-            .collect();
-        assert_eq!(labels, [Some("[1]"), Some("[2]")]);
-        assert_eq!(out.warnings.len(), 3, "{:?}", out.warnings);
-        assert!(out.warnings[0].contains("citation 3:") && out.warnings[1].contains("nobody"));
+        assert_eq!(out.citations[0].as_deref(), Some("[1]"));
+        assert_eq!(out.citations[1].as_deref(), Some("[2, p. 3]"));
+        assert_eq!(out.citations[2].as_deref(), Some("[1], [2]"));
+        assert_eq!(out.citations[3], None);
+        let keys: Vec<_> = out.bibliography.iter().map(|e| e.key.as_str()).collect();
+        assert_eq!(keys, ["ERA5LandHourlyData2019", "doe2020"]);
+        assert_eq!(out.warnings.len(), 1, "{:?}", out.warnings);
+        assert!(out.warnings[0].contains("nobody"));
     }
 
     #[test]

@@ -20,7 +20,6 @@
   "title": null,
   "warnings": [
     "gone.bib: not found",
-    "citation 3: no reference has the key nobody",
-    "the document cites .bib and CSL references: each format is numbered and listed on its own, and two works that cite alike are not told apart"
+    "citation 3: no reference has the key nobody"
   ]
 }
