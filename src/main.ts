@@ -54,7 +54,13 @@ import {
 } from "./document";
 import { citationCompletion, citationHover } from "./citations";
 import { applyMeta, parseMeta, type DocMeta, type MetaFormat } from "./meta";
-import { forgetLoadedReferences, syncReferences } from "./references";
+import {
+  currentReferences,
+  describeSources,
+  forgetLoadedReferences,
+  referencesLabel,
+  syncReferences,
+} from "./references";
 import { PortabilityMode, portabilityExtensions } from "./portability";
 import { livePreviewExtensions } from "./livepreview";
 import { imageReferenceAt, type ImageReference } from "./imageref";
@@ -531,8 +537,69 @@ function syncFileWatch() {
 
 /** Load the references the header names for the document as it is now. */
 function syncReferencesNow() {
-  void syncReferences(currentPath, view.state.doc.toString());
+  void syncReferences(currentPath, view.state.doc.toString()).then(
+    refreshReferencesStatus,
+  );
 }
+
+// --- references panel: what the header names, and what could not be read ---
+const referencesStatus = document.getElementById(
+  "references-status",
+) as HTMLButtonElement;
+const referencesPanel = document.getElementById("references-panel")!;
+
+/** The status-bar entry follows the loaded list; absent without references. */
+function refreshReferencesStatus() {
+  const refs = currentReferences();
+  const label = referencesLabel(refs);
+  referencesStatus.hidden = label === "";
+  referencesStatus.textContent = label;
+  referencesStatus.classList.toggle("has-warnings", refs.warnings.length > 0);
+  if (referencesStatus.hidden) toggleReferencesPanel(false);
+  else if (!referencesPanel.hidden) renderReferencesPanel();
+}
+
+// Text only: a source name or warning comes from a file the document names.
+function renderReferencesPanel() {
+  referencesPanel.replaceChildren();
+  for (const line of describeSources(currentReferences())) {
+    const row = document.createElement("div");
+    row.className = "references-source";
+    const name = document.createElement("span");
+    name.textContent = line.name;
+    const summary = document.createElement("span");
+    summary.className = "summary";
+    summary.textContent = line.summary;
+    row.append(name, summary);
+    for (const warning of line.warnings) {
+      const item = document.createElement("div");
+      item.className = "warning";
+      item.textContent = warning;
+      row.append(item);
+    }
+    referencesPanel.append(row);
+  }
+}
+
+function toggleReferencesPanel(show = referencesPanel.hidden) {
+  referencesPanel.hidden = !show;
+  referencesStatus.setAttribute("aria-expanded", String(show));
+  if (!show) return;
+  renderReferencesPanel();
+  // Right-aligned with the entry that opened it, kept on screen.
+  const entry = referencesStatus.getBoundingClientRect();
+  const left = Math.max(8, entry.right - referencesPanel.offsetWidth);
+  referencesPanel.style.left = `${left}px`;
+}
+
+referencesStatus.addEventListener("click", () => toggleReferencesPanel());
+document.addEventListener("mousedown", (e) => {
+  if (referencesPanel.hidden) return;
+  const target = e.target as HTMLElement;
+  if (target.closest("#references-panel, #references-status") === null) {
+    toggleReferencesPanel(false);
+  }
+});
 
 // Loading reads the bibliography files, so typing inside the header waits
 // for a pause rather than reading them on every keystroke.
@@ -4203,6 +4270,10 @@ window.addEventListener(
     }
     if (e.key === "Escape" && !settingsMenu.hidden) {
       toggleSettingsMenu(false);
+      return;
+    }
+    if (e.key === "Escape" && !referencesPanel.hidden) {
+      toggleReferencesPanel(false);
       return;
     }
     if (e.key === "Escape" && !printPreview.hidden) {
