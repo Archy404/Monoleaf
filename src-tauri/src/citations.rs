@@ -44,7 +44,9 @@ pub fn locale_named(lang: Option<&str>) -> LocaleCode {
 }
 
 /// One citation as the editor found it: `[@a; @b, p. 3]` has two items.
+/// The field names are the frontend's; it sends what its parser found.
 #[derive(Clone, Debug, Default, PartialEq, Eq, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct Citation {
     pub items: Vec<CitedItem>,
     /// The in-text form `@key`: "Doe (2020)" rather than "(Doe 2020)".
@@ -53,6 +55,7 @@ pub struct Citation {
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Eq, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct CitedItem {
     pub key: String,
     /// What follows the key, `p. 3`; read as a page until labels are parsed.
@@ -62,15 +65,20 @@ pub struct CitedItem {
 
 /// What the export prints: the citations in order and the reference list.
 #[derive(Clone, Debug, Default, PartialEq, Eq, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct RenderedCitations {
     /// One per citation given; `None` where it stays as written.
     pub citations: Vec<Option<String>>,
     pub bibliography: Vec<BibliographyEntry>,
     pub hanging_indent: bool,
+    /// The heading over the list, from `reference-section-title:`; none
+    /// without it, as pandoc prints the list.
+    pub title: Option<String>,
     pub warnings: Vec<String>,
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Eq, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct BibliographyEntry {
     pub key: String,
     /// What numeric styles print in front of the entry, `[1]`.
@@ -225,6 +233,7 @@ pub fn render_document(
     let locale = locale_named(header_string(front_matter, "lang").as_deref());
     let loaded = references::load_references(document_path, front_matter, allow_network);
     let mut out = render(&loaded.references, &style, &locale, citations);
+    out.title = header_string(front_matter, "reference-section-title");
     out.warnings.splice(0..0, loaded.warnings);
     Ok(out)
 }
@@ -331,7 +340,9 @@ mod tests {
 
     #[test]
     fn a_document_renders_from_its_header_alone() {
-        let header = format!("csl: apa\nlang: en-US\n{ISSUE_EXAMPLE}bibliography: gone.bib\n");
+        let header = format!(
+            "csl: apa\nlang: en-US\nreference-section-title: Sources\n{ISSUE_EXAMPLE}bibliography: gone.bib\n"
+        );
         let cited = [cite(&["ERA5LandHourlyData2019"])];
         let document = std::env::temp_dir().join("paper.md");
         let out = render_document(document.to_str(), &header, false, &cited).unwrap();
@@ -340,6 +351,12 @@ mod tests {
             Some("(Copernicus Climate Change Service, 2019)")
         );
         assert_eq!(out.warnings, ["gone.bib: not found"]);
+        assert_eq!(out.title.as_deref(), Some("Sources"));
+        let json = serde_json::to_value(&out).unwrap();
+        assert!(json.get("hangingIndent").is_some());
+        let sent: Citation =
+            serde_json::from_str(r#"{"items":[{"key":"a"}],"inText":true}"#).unwrap();
+        assert!(sent.in_text && sent.items[0].key == "a");
         let err = render_document(None, "csl: nope\n", false, &cited).unwrap_err();
         assert!(err.starts_with("unknown citation style"));
     }
