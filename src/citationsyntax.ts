@@ -1,0 +1,139 @@
+/**
+ * Pandoc's citation syntax, read from plain text: `[@a]`, `[@a; @b]`,
+ * `[see @a, p. 3; also -@b]` and in-text `@a` or `@a [p. 3]`. Pure text
+ * functions, shared by the editor and the export; nothing is rendered here.
+ */
+
+/** A citation key around a position: `from` is the `@`, `to` the key's end. */
+export interface Citation {
+  from: number;
+  to: number;
+  key: string;
+}
+
+// A pandoc key starts with a letter, digit or `_` and goes on with those and
+// internal punctuation; punctuation at the very end belongs to the sentence.
+const KEY_START = /[A-Za-z0-9_]/;
+const KEY_CHAR = /[A-Za-z0-9_:.#$%&\-+?<>~/]/;
+
+/**
+ * The citation whose key spans `pos`, or null. The key may be empty when the
+ * cursor sits right after a fresh `@`, which is what completion waits for.
+ * A `@` that follows a letter or digit is part of an e-mail address.
+ */
+export function citationAt(text: string, pos: number): Citation | null {
+  let start = pos;
+  while (start > 0 && KEY_CHAR.test(text[start - 1])) start--;
+  const at = start - 1;
+  if (text[at] !== "@") return null;
+  if (at > 0 && KEY_START.test(text[at - 1])) return null;
+  if (start < text.length && !KEY_START.test(text[start]) && start < pos)
+    return null;
+  let end = pos;
+  while (end < text.length && KEY_CHAR.test(text[end])) end++;
+  while (end > pos && !KEY_START.test(text[end - 1])) end--;
+  if (end === start && start < text.length && KEY_CHAR.test(text[start]))
+    return null;
+  return { from: at, to: end, key: text.slice(start, end) };
+}
+
+/** One cited work inside a citation, with what the citation says about it. */
+export interface CitedItem {
+  key: string;
+  /** Text before the key: "see" in `[see @a]`. */
+  prefix: string;
+  /** Where in the work: "p. 3", "chap. 2"; empty when none. */
+  locator: string;
+  /** Text after the locator, or after the key when there is none. */
+  suffix: string;
+  /** `-@a`: the author is left out, "(2020)" in author-date styles. */
+  suppressAuthor: boolean;
+}
+
+/** A whole citation in the text, brackets included in `from` and `to`. */
+export interface ParsedCitation {
+  from: number;
+  to: number;
+  items: CitedItem[];
+  /** The `@a` form outside brackets: "Doe (2020)" rather than "(Doe 2020)". */
+  inText: boolean;
+}
+
+// Pandoc's locator terms, short or long, then the numbers; a bare number is
+// a page. What follows the last digit belongs to the suffix.
+const LOCATOR =
+  /^(?:(?:p{1,2}|pages?|chap(?:ter)?|sec(?:tion)?|para(?:graph)?|fig(?:ure)?|vol(?:ume)?|n|note|col(?:umn)?|pt|part|bk|book|l|line|no|number|v|verse)\.?\s*)?\d[\d\-–,\s]*/i;
+
+/** The locator and the suffix of what follows a key, `, p. 3, emphasis added`. */
+function locatorAndSuffix(rest: string): { locator: string; suffix: string } {
+  const text = rest.replace(/^\s*,?\s*/, "");
+  const found = LOCATOR.exec(text);
+  if (found === null) return { locator: "", suffix: text.trim() };
+  return {
+    locator: found[0].replace(/[,\s]+$/, ""),
+    suffix: text.slice(found[0].length).trim(),
+  };
+}
+
+/** One `;`-separated part of a bracket as a cited work, or null without a key. */
+function parseItem(part: string): CitedItem | null {
+  for (let at = part.indexOf("@"); at !== -1; at = part.indexOf("@", at + 1)) {
+    const found = citationAt(part, at + 1);
+    if (found === null || found.key === "") continue;
+    const before = part.slice(0, found.from);
+    const suppressAuthor = before.endsWith("-");
+    const prefix = (suppressAuthor ? before.slice(0, -1) : before).trim();
+    const { locator, suffix } = locatorAndSuffix(part.slice(found.to));
+    return { key: found.key, prefix, locator, suffix, suppressAuthor };
+  }
+  return null;
+}
+
+/**
+ * Every citation in `text`, in order. A bracket is a citation when each of
+ * its `;`-separated parts has a key; otherwise its keys count as in-text
+ * citations, as pandoc reads them. Code spans are the caller's business.
+ */
+export function findCitations(text: string): ParsedCitation[] {
+  const citations: ParsedCitation[] = [];
+  let pos = 0;
+  while (pos < text.length) {
+    if (text[pos] === "[") {
+      const close = text.indexOf("]", pos + 1);
+      const nested = text.indexOf("[", pos + 1);
+      if (close !== -1 && (nested === -1 || nested > close)) {
+        const items: CitedItem[] = [];
+        for (const part of text.slice(pos + 1, close).split(";")) {
+          const item = parseItem(part);
+          if (item === null) break;
+          items.push(item);
+        }
+        if (items.length === text.slice(pos + 1, close).split(";").length) {
+          citations.push({ from: pos, to: close + 1, items, inText: false });
+          pos = close + 1;
+          continue;
+        }
+      }
+    } else if (text[pos] === "@") {
+      const found = citationAt(text, pos + 1);
+      if (found !== null && found.key !== "") {
+        // the in-text form may carry its locator in a bracket: `@a [p. 3]`
+        const bracket = /^ ?\[([^\]@]*)\]/.exec(text.slice(found.to));
+        const { locator, suffix } = locatorAndSuffix(bracket?.[1] ?? "");
+        const to = found.to + (bracket?.[0].length ?? 0);
+        const item = {
+          key: found.key,
+          prefix: "",
+          locator,
+          suffix,
+          suppressAuthor: false,
+        };
+        citations.push({ from: found.from, to, items: [item], inText: true });
+        pos = to;
+        continue;
+      }
+    }
+    pos++;
+  }
+  return citations;
+}
