@@ -17,6 +17,18 @@ pub struct ReferenceSummary {
     pub authors: Vec<String>,
     pub year: Option<i32>,
     pub title: String,
+    pub format: ReferenceFormat,
+}
+
+/// What a reference was read from. The export renders each format in a run
+/// of its own, so the editor tells the user when a document mixes them.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize)]
+#[serde(rename_all = "lowercase")]
+pub enum ReferenceFormat {
+    /// A `.bib` file.
+    Bib,
+    /// CSL data: a JSON or YAML file, or the header's `references:` list.
+    Csl,
 }
 
 /// The entries a source gave, and a warning for each entry it had to skip.
@@ -187,6 +199,7 @@ fn parse_chunk(
 
 fn summarize(entry: &hayagriva::Entry) -> ReferenceSummary {
     ReferenceSummary {
+        format: ReferenceFormat::Bib,
         key: entry.key().to_string(),
         authors: entry
             .authors()
@@ -443,6 +456,7 @@ fn summarize_item(id: &str, item: &Item) -> ReferenceSummary {
     };
     let title = item.0.get("title").and_then(Value::to_str);
     ReferenceSummary {
+        format: ReferenceFormat::Csl,
         key: id.to_string(),
         authors,
         year: item.0.get("issued").and_then(year_of),
@@ -563,6 +577,7 @@ mod tests {
     #[test]
     fn bib_authors_are_family_name_first_and_an_institution_stays_whole() {
         let entries = references_from_biblatex(SAMPLE).entries;
+        assert_eq!(entries[0].format, ReferenceFormat::Bib);
         assert_eq!(entries[0].authors, ["Doe, Jane", "van der Roe, Richard"]);
         assert_eq!(entries[1].authors, ["Copernicus Climate Change Service"]);
         assert!(entries[2].authors.is_empty());
@@ -607,6 +622,7 @@ mod tests {
         let found = references_from_csl_yaml(header).unwrap();
         assert_eq!(found.entries.len(), 1);
         assert_eq!(found.entries[0].key, "era5");
+        assert_eq!(found.entries[0].format, ReferenceFormat::Csl);
         assert_eq!(
             found.entries[0].authors,
             ["Copernicus Climate Change Service"]
