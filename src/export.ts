@@ -837,6 +837,10 @@ table { border-collapse: collapse; margin: 1em 0; }
 img { max-width: 100%; height: auto; }
 hr { border: none; border-top: 1px solid #d8dee4; margin: 1.5em 0; }
 ul, ol { padding-left: 1.6em; }
+.csl-entry { margin: 0 0 0.5em; }
+.hanging-indent .csl-entry { padding-left: 2em; text-indent: -2em; }
+.csl-left-margin { float: left; min-width: 2.5em; }
+.csl-right-inline { margin-left: 2.5em; }
 @media (prefers-color-scheme: dark) {
   body { color: #e6edf3; background: #0d1117; }
   h1, h2 { border-bottom-color: #21262d; }
@@ -1120,6 +1124,13 @@ ${root} sup.footnote-ref { font-size: 0.72em; }
 ${root} .footnotes { font-size: 9pt; margin-top: 14pt; padding-top: 6pt; border-top: 0.75pt solid #cccccc; }
 ${root} .footnotes ol { padding-left: 1.4em; margin: 4pt 0; }
 ${root} .footnotes li { margin: 2pt 0; }
+/* The reference list as pandoc lays it out: a hanging indent where the style
+   asks for one, a numeric style's label in a left margin. */
+${root} .references-title { break-after: avoid; }
+${root} .csl-entry { margin: 0 0 5pt; break-inside: avoid; }
+${root} .hanging-indent .csl-entry { padding-left: 2em; text-indent: -2em; }
+${root} .csl-left-margin { float: left; min-width: 2.5em; }
+${root} .csl-right-inline { margin-left: 2.5em; }
 ${root} mark { background: #fbe3a0; color: inherit; border-radius: 2px; } /* warm amber highlighter, matches the editor */
 .ml-pagebreak { display: block; height: 0; break-after: page; }
 ${cfg.justify ? `${root} p { text-align: justify; }` : ""}

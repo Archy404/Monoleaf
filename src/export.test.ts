@@ -351,6 +351,18 @@ describe("renderDocumentHtml", () => {
     expect(css).toContain("width: 100%");
   });
 
+  it("print and standalone CSS lay out the reference list as pandoc does", () => {
+    const css = buildPrintCss(DEFAULT_PAGE_CONFIG, VARS);
+    expect(css).toContain(
+      ".hanging-indent .csl-entry { padding-left: 2em; text-indent: -2em; }",
+    );
+    expect(css).toContain(".csl-left-margin { float: left;");
+    const html = renderStandaloneHtml("# x\n", "strict", "T");
+    expect(html).toContain(
+      ".hanging-indent .csl-entry { padding-left: 2em; text-indent: -2em; }",
+    );
+  });
+
   it("renders sub/sup in enhanced mode only", () => {
     const doc = "H~2~O and 5^th^\n";
     expect(renderDocumentHtml(doc, "enhanced")).toContain("<sub>2</sub>");
