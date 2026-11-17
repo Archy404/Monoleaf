@@ -6,11 +6,12 @@ const references = () => ({
   entries: [
     {
       key: "doe2020",
+      format: "bib" as const,
       authors: ["Doe, Jane", "Roe, Richard"],
       year: 2020,
       title: "A study",
     },
-    { key: "bare", authors: [], year: null, title: "" },
+    { key: "bare", format: "bib" as const, authors: [], year: null, title: "" },
   ],
   warnings: [],
   sources: [],

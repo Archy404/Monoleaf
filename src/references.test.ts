@@ -11,10 +11,14 @@ import {
   resetReferencesForTests,
   syncReferences,
   type References,
+  formatMix,
+  formatMixNote,
 } from "./references";
 
 const found = {
-  entries: [{ key: "doe", authors: [], year: null, title: "" }],
+  entries: [
+    { key: "doe", format: "bib" as const, authors: [], year: null, title: "" },
+  ],
   warnings: [],
   sources: [{ name: "refs.bib", entries: 1 }],
 };
@@ -99,9 +103,46 @@ describe("syncReferences", () => {
   });
 });
 
+describe("formatMix", () => {
+  const entry = (key: string, format: "bib" | "csl") => ({
+    key,
+    format,
+    authors: [],
+    year: null,
+    title: "",
+  });
+  const refs = (...entries: ReturnType<typeof entry>[]): References => ({
+    entries,
+    warnings: [],
+    sources: [],
+  });
+
+  it("is none with one format, however the text cites", () => {
+    expect(
+      formatMix(refs(entry("a", "bib"), entry("b", "bib")), ["a", "b"]),
+    ).toBe("none");
+    expect(formatMix(refs(), ["a"])).toBe("none");
+  });
+
+  it("is sources when the header mixes but the text cites one format", () => {
+    const mixed = refs(entry("a", "bib"), entry("b", "csl"));
+    expect(formatMix(mixed, ["a", "a", "nobody"])).toBe("sources");
+    expect(formatMix(mixed, [])).toBe("sources");
+  });
+
+  it("is cited when the text cites both formats", () => {
+    const mixed = refs(entry("a", "bib"), entry("b", "csl"));
+    expect(formatMix(mixed, ["b", "a"])).toBe("cited");
+    expect(formatMixNote("cited")).toContain("not told apart");
+    expect(formatMixNote("none")).toBeNull();
+  });
+});
+
 describe("the panel text", () => {
   const loaded: References = {
-    entries: [{ key: "a", authors: [], year: null, title: "" }],
+    entries: [
+      { key: "a", format: "bib" as const, authors: [], year: null, title: "" },
+    ],
     warnings: [
       "header: entry 2 skipped, it has no id",
       "missing.bib: not found",

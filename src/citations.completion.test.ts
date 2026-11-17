@@ -5,9 +5,16 @@ import { citationCompletions } from "./citations";
 
 const references = () => ({
   entries: [
-    { key: "doe2020", authors: ["Doe, Jane"], year: 2020, title: "A study" },
+    {
+      key: "doe2020",
+      format: "bib" as const,
+      authors: ["Doe, Jane"],
+      year: 2020,
+      title: "A study",
+    },
     {
       key: "era5",
+      format: "bib" as const,
       authors: ["Copernicus Climate Change Service"],
       year: null,
       title: "ERA5-Land",
