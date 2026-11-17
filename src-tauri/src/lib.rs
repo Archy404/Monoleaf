@@ -8,6 +8,7 @@ use tauri::ipc::Channel;
 use tauri::{AppHandle, Emitter, Manager, WebviewUrl, WebviewWindowBuilder};
 use tauri_plugin_updater::Update;
 
+pub mod citations;
 mod filewatch;
 pub mod pdfimport;
 pub mod references;
