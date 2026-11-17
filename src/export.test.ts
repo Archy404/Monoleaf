@@ -201,6 +201,14 @@ describe("renderDocumentHtml", () => {
     expect(html).toContain("a b c");
   });
 
+  it("prints a citation as written until the backend renders it", () => {
+    const doc = "See [@doe2020, p. 3] and @roe, or mail jane@doe.org.\n";
+    const html = renderDocumentHtml(doc, "strict");
+    expect(html).toContain(
+      "See [@doe2020, p. 3] and @roe, or mail jane@doe.org.",
+    );
+  });
+
   it("strips the ml:meta comment block from the body", () => {
     const doc =
       '<!--ml:meta {"title":"Report","author":"Martin"}-->\n\n# Body\n';

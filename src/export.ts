@@ -1,8 +1,9 @@
-import MarkdownIt, { type StateCore } from "markdown-it";
+import MarkdownIt, { type StateCore, type StateInline } from "markdown-it";
 import taskLists from "markdown-it-task-lists";
 import sub from "markdown-it-sub";
 import sup from "markdown-it-sup";
 import footnotePlugin from "markdown-it-footnote";
+import { findCitations, type ParsedCitation } from "./citationsyntax";
 import katexPluginImport from "@vscode/markdown-it-katex";
 import hljs from "highlight.js/lib/core";
 import javascript from "highlight.js/lib/languages/javascript";
@@ -355,6 +356,55 @@ function installAdmonitions(md: InstanceType<typeof MarkdownIt>): void {
   });
 }
 
+/** The citations a parse found, in document order, and what the backend
+ * rendered for each; both live on `env` between parse and render. */
+type CitationEnv = {
+  citations?: ParsedCitation[];
+  renderedCitations?: readonly (string | null)[];
+};
+
+/**
+ * Pandoc citations, `[@key]` and `@key`, as their own inline token, so the
+ * export can collect them after the parse, have the backend render them and
+ * print the result. Without a rendering a citation prints as written.
+ */
+function installCitations(md: InstanceType<typeof MarkdownIt>): void {
+  // Before `link`: a bracket that holds a citation is not a link.
+  md.inline.ruler.before(
+    "link",
+    "ml_citation",
+    (state: StateInline, silent: boolean) => {
+      const ch = state.src[state.pos];
+      if (ch !== "[" && ch !== "@") return false;
+      // The parser only sees the slice from here on, so the e-mail check on
+      // the character before the `@` happens here.
+      if (ch === "@" && /[A-Za-z0-9_]/.test(state.src[state.pos - 1] ?? ""))
+        return false;
+      // A citation does not cross a line; the slice keeps the scan short.
+      const lineEnd = state.src.indexOf("\n", state.pos);
+      const end =
+        lineEnd === -1 ? state.posMax : Math.min(lineEnd, state.posMax);
+      const [citation] = findCitations(state.src.slice(state.pos, end));
+      if (citation === undefined || citation.from !== 0) return false;
+      if (!silent) {
+        const env = state.env as CitationEnv;
+        const token = state.push("citation", "", 0);
+        token.content = state.src.slice(state.pos, state.pos + citation.to);
+        token.meta = { index: (env.citations ??= []).push(citation) - 1 };
+      }
+      state.pos += citation.to;
+      return true;
+    },
+  );
+  md.renderer.rules.citation = (tokens, idx, _opts, env) => {
+    const token = tokens[idx];
+    const { index } = token.meta as { index: number };
+    const rendered = (env as CitationEnv).renderedCitations?.[index] ?? null;
+    if (rendered === null) return md.utils.escapeHtml(token.content);
+    return `<span class="citation">${rendered}</span>`;
+  };
+}
+
 const NO_LOCAL_IMAGES: ReadonlyMap<string, string> = new Map();
 
 /** What the renderer is handed alongside the tokens. markdown-it's `env` is
@@ -532,6 +582,7 @@ function buildRenderer(
   md.use(katexPlugin, { output: "mathml", throwOnError: false });
   md.use(footnotePlugin); // [^1] references + a footnotes section at the end
   installAdmonitions(md); // > [!NOTE] blockquotes → styled callout boxes
+  installCitations(md); // [@key] and @key → tokens the backend renders
 
   // Table borders/shading as INLINE styles on the elements — Paged.js's own
   // table styles (injected for fragmentation) strip stylesheet borders even
