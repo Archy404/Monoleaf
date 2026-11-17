@@ -653,4 +653,43 @@ mod tests {
         let err = render_document(None, "csl: nope\n", false, &cited).unwrap_err();
         assert!(err.starts_with("unknown citation style"));
     }
+
+    /// The header of a fixture document, between its `---` lines.
+    fn front_matter(text: &str) -> &str {
+        let body = text.strip_prefix("---\n").unwrap_or("");
+        body.split("\n---\n").next().unwrap_or("")
+    }
+
+    /// The citation chain's Rust link (see src/citations.fixtures.test.ts):
+    /// `name.citations.json`, what the export sends for `name.md`, renders
+    /// with the document's header to `name.rendered.json`, which the export
+    /// snapshot feeds back in. MONOLEAF_UPDATE_FIXTURES=1 rewrites the
+    /// rendered files after an intended change.
+    #[test]
+    fn fixture_documents_render_as_committed() {
+        let dir =
+            std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../src/__fixtures__/citations");
+        let mut seen = 0;
+        for entry in std::fs::read_dir(&dir).unwrap() {
+            let path = entry.unwrap().path();
+            if path.extension().and_then(|e| e.to_str()) != Some("md") {
+                continue;
+            }
+            let base = path.with_extension("").display().to_string();
+            let text = std::fs::read_to_string(&path).unwrap();
+            let sent = std::fs::read_to_string(format!("{base}.citations.json")).unwrap();
+            let cited: Vec<Citation> = serde_json::from_str(&sent).unwrap();
+            let out = render_document(path.to_str(), front_matter(&text), false, &cited).unwrap();
+            let json = serde_json::to_string_pretty(&out).unwrap() + "\n";
+            let rendered = format!("{base}.rendered.json");
+            if std::env::var_os("MONOLEAF_UPDATE_FIXTURES").is_some() {
+                std::fs::write(&rendered, &json).unwrap();
+            } else {
+                let committed = std::fs::read_to_string(&rendered).unwrap_or_default();
+                assert_eq!(committed, json, "{rendered} differs from the rendering; MONOLEAF_UPDATE_FIXTURES=1 cargo test rewrites it");
+            }
+            seen += 1;
+        }
+        assert!(seen > 0, "no fixture documents in {}", dir.display());
+    }
 }
