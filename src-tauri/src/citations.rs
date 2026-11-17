@@ -37,11 +37,15 @@ pub fn style_named(name: Option<&str>) -> Result<IndependentStyle, String> {
     }
 }
 
-/// The locale from `lang:`, English (US) when the header has none.
-pub fn locale_named(lang: Option<&str>) -> LocaleCode {
+/// The locale from `lang:`; without one the style's own default locale,
+/// as Pandoc does, and English (US) when the style names none either.
+pub fn locale_named(lang: Option<&str>, style: &IndependentStyle) -> LocaleCode {
     match lang.map(str::trim).filter(|l| !l.is_empty()) {
         Some(lang) => LocaleCode(lang.to_string()),
-        None => LocaleCode::en_us(),
+        None => style
+            .default_locale
+            .clone()
+            .unwrap_or_else(LocaleCode::en_us),
     }
 }
 
@@ -437,7 +441,7 @@ pub fn render_document(
     citations: &[Citation],
 ) -> Result<RenderedCitations, String> {
     let style = style_named(header_string(front_matter, "csl").as_deref())?;
-    let locale = locale_named(header_string(front_matter, "lang").as_deref());
+    let locale = locale_named(header_string(front_matter, "lang").as_deref(), &style);
     let loaded = references::load_references(document_path, front_matter, allow_network);
     let mut out = render(&loaded.references, &style, &locale, citations);
     out.title = header_string(front_matter, "reference-section-title");
@@ -487,17 +491,21 @@ mod tests {
     }
 
     #[test]
-    fn locale_defaults_to_en_us() {
-        assert_eq!(locale_named(None), LocaleCode::en_us());
-        assert_eq!(locale_named(Some("de-DE")).0, "de-DE");
+    fn locale_comes_from_the_header_then_the_style_then_en_us() {
+        let apa = style_named(Some("apa")).unwrap();
+        let thieme = style_named(Some("thieme")).unwrap();
+        assert_eq!(locale_named(None, &apa), LocaleCode::en_us());
+        assert_eq!(locale_named(None, &thieme).0, "de-DE");
+        assert_eq!(locale_named(Some("en-GB"), &thieme).0, "en-GB");
     }
 
     #[test]
     fn the_issue_example_renders_in_the_default_and_in_apa() {
         let references = read_csl_yaml(ISSUE_EXAMPLE).unwrap().references;
         let cited = [cite(&["ERA5LandHourlyData2019"])];
-        let locale = locale_named(None);
-        let out = render(&references, &style_named(None).unwrap(), &locale, &cited);
+        let style = style_named(None).unwrap();
+        let locale = locale_named(None, &style);
+        let out = render(&references, &style, &locale, &cited);
         assert_eq!(
             out.citations,
             [Some("(Copernicus Climate Change Service 2019)".into())]
@@ -531,7 +539,7 @@ mod tests {
             cite(&["nobody"]),
         ];
         let style = style_named(Some("ieee")).unwrap();
-        let out = render(&references, &style, &locale_named(None), &cited);
+        let out = render(&references, &style, &locale_named(None, &style), &cited);
         assert_eq!(out.citations[0].as_deref(), Some("[2]"));
         assert_eq!(out.citations[1].as_deref(), Some("[1, p. 3]"));
         assert_eq!((&out.citations[2], &out.citations[3]), (&None, &None));
@@ -560,7 +568,7 @@ mod tests {
         group.items[1].prefix = "also".into();
         group.items[1].suppress_author = true;
         let cited = [seen, year, page, group];
-        let locale = locale_named(None);
+        let locale = LocaleCode::en_us();
         let apa = render(
             &references,
             &style_named(Some("apa")).unwrap(),
@@ -613,7 +621,12 @@ mod tests {
             })
             .collect();
         let style = style_named(Some("apa")).unwrap();
-        let out = render(&references, &style, &locale_named(Some("de-DE")), &cited);
+        let out = render(
+            &references,
+            &style,
+            &locale_named(Some("de-DE"), &style),
+            &cited,
+        );
         let texts: Vec<_> = out
             .citations
             .iter()
