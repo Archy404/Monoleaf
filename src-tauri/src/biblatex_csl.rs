@@ -3,7 +3,7 @@
 //! CSL JSON, and like Pandoc prints them. A field Pandoc does not read is not
 //! read here either.
 
-use biblatex::{Chunks, ChunksExt, ChunksRef, Date, DateValue as BibDate, Entry, EntryType};
+use biblatex::{Chunk, Chunks, ChunksExt, ChunksRef, Date, DateValue as BibDate, Entry, EntryType};
 use hayagriva::citationberg::json::{
     DateValue, Item, LiteralName, NameItem, NameValue, Value, VecDate, VecDateRange,
 };
@@ -76,13 +76,14 @@ const EPRINT_SITES: [(&str, &str); 4] = [
 
 /// The CSL item for one entry. Never fails: a field that cannot be read as
 /// its type is taken as text, a date that is no date becomes the literal
-/// text of the date.
-pub fn item_of(entry: &Entry) -> Item {
+/// text of the date. `english_document` says whether the citing document is
+/// English; only then do titles go to sentence case, as in Pandoc.
+pub fn item_of(entry: &Entry, english_document: bool) -> Item {
     let mut item = Fields::default();
     item.set("id", Some(entry.key.clone()));
     item.set("type", csl_type(entry).map(str::to_string));
     item.set("genre", genre(entry));
-    titles(entry, &mut item);
+    titles(entry, &mut item, english_document);
     numbers(entry, &mut item);
     publishers(entry, &mut item);
     identifiers(entry, &mut item);
@@ -223,28 +224,47 @@ fn key_text(value: &str) -> String {
 
 /// Title, container and series. A book with a `maintitle` is a volume of
 /// it: the main title is the title, the book's own becomes the volume title.
-fn titles(entry: &Entry, item: &mut Fields) {
-    let own = joined(entry, "title", "subtitle", "titleaddon");
+/// Titles of an English entry go to sentence case, as Pandoc puts them, so a
+/// style may raise them again; a journal's name keeps its case.
+fn titles(entry: &Entry, item: &mut Fields, english_document: bool) {
+    let english = english_document && is_english(entry);
+    let own = joined(entry, "title", "subtitle", "titleaddon", english);
     if !is_chapter_like(entry) && entry.get("maintitle").is_some() {
         item.set(
             "title",
-            joined(entry, "maintitle", "mainsubtitle", "maintitleaddon"),
+            joined(
+                entry,
+                "maintitle",
+                "mainsubtitle",
+                "maintitleaddon",
+                english,
+            ),
         );
         item.set("volume-title", own);
     } else {
         item.set("title", own.clone());
-        match text(entry, "shorttitle") {
-            Some(short) => item.set("title-short", Some(short)),
-            None if entry.get("subtitle").is_some() || entry.get("titleaddon").is_some() => {
-                item.set("title-short", text(entry, "title"));
+        let short = match titled(entry, "shorttitle", english) {
+            Some(short) => Some(short),
+            None => {
+                let title = titled(entry, "title", english);
+                let has_more = entry.get("subtitle").is_some()
+                    || entry.get("titleaddon").is_some()
+                    || title.as_deref().is_some_and(|t| t.contains(':'));
+                has_more.then(|| title.map(|t| before_colon(&t))).flatten()
             }
-            None => {}
-        }
+        };
+        item.set("title-short", short);
     }
     if is_chapter_like(entry) && entry.get("booktitle").is_some() {
         item.set(
             "container-title",
-            joined(entry, "booktitle", "booksubtitle", "booktitleaddon"),
+            joined(
+                entry,
+                "booktitle",
+                "booksubtitle",
+                "booktitleaddon",
+                english,
+            ),
         );
     } else if entry.get("journaltitle").is_some() {
         item.set(
@@ -254,23 +274,58 @@ fn titles(entry: &Entry, item: &mut Fields) {
                 "journaltitle",
                 "journalsubtitle",
                 "journaltitleaddon",
+                false,
             ),
         );
     } else {
         item.set("container-title", text(entry, "journal"));
     }
     item.set("container-title-short", text(entry, "shortjournal"));
-    item.set("collection-title", text(entry, "series"));
-    item.set("event", text(entry, "eventtitle"));
-    item.set("original-title", text(entry, "origtitle"));
+    item.set("collection-title", titled(entry, "series", english));
+    item.set("event", titled(entry, "eventtitle", english));
+    item.set("original-title", titled(entry, "origtitle", english));
+}
+
+/// The part of a title before its first colon, the whole title without one.
+fn before_colon(title: &str) -> String {
+    title
+        .split(':')
+        .next()
+        .unwrap_or_default()
+        .trim()
+        .to_string()
+}
+
+/// Whether the entry's titles are English: no `langid`, or one that names an
+/// English variant. Pandoc puts only those into sentence case.
+fn is_english(entry: &Entry) -> bool {
+    match text(entry, "langid").or_else(|| text(entry, "hyphenation")) {
+        None => true,
+        Some(name) => language_code(&name).starts_with("en"),
+    }
+}
+
+/// The CSL locale of a BibLaTeX language name; an unknown name as it is.
+fn language_code(name: &str) -> String {
+    let key = name.to_ascii_lowercase();
+    LANGUAGES
+        .iter()
+        .find(|(bib, _)| *bib == key)
+        .map_or_else(|| name.to_string(), |(_, code)| code.to_string())
 }
 
 /// "Title: Subtitle. Addon", each part only when present; after a part that
 /// ends in punctuation only a space follows.
-fn joined(entry: &Entry, title: &str, subtitle: &str, addon: &str) -> Option<String> {
-    let mut out = text(entry, title)?;
+fn joined(
+    entry: &Entry,
+    title: &str,
+    subtitle: &str,
+    addon: &str,
+    sentence_case: bool,
+) -> Option<String> {
+    let mut out = titled(entry, title, sentence_case)?;
     for (field, separator) in [(subtitle, ":"), (addon, ".")] {
-        if let Some(part) = text(entry, field) {
+        if let Some(part) = titled(entry, field, sentence_case) {
             if !out.ends_with(['!', '?', '.', ',', ':', ';']) {
                 out.push_str(separator);
             }
@@ -347,22 +402,22 @@ fn publishers(entry: &Entry, item: &mut Fields) {
 /// URL, DOI and the identifier fields, which CSL names in capitals; an
 /// eprint on a known site gives the URL when the entry has none.
 fn identifiers(entry: &Entry, item: &mut Fields) {
-    item.set("URL", text(entry, "url"));
+    item.set("URL", verbatim(entry, "url"));
     if !item.has("URL") {
-        let site = text(entry, "eprinttype")
-            .or_else(|| text(entry, "archiveprefix"))
+        let site = verbatim(entry, "eprinttype")
+            .or_else(|| verbatim(entry, "archiveprefix"))
             .map(|s| s.to_ascii_lowercase());
-        if let (Some(site), Some(id)) = (site, text(entry, "eprint")) {
+        if let (Some(site), Some(id)) = (site, verbatim(entry, "eprint")) {
             if let Some((_, base)) = EPRINT_SITES.iter().find(|(name, _)| *name == site) {
                 item.set("URL", Some(format!("{base}{id}")));
             }
         }
     }
-    item.set("DOI", text(entry, "doi"));
-    item.set("ISBN", text(entry, "isbn"));
-    item.set("ISSN", text(entry, "issn"));
-    item.set("PMID", text(entry, "pmid"));
-    item.set("PMCID", text(entry, "pmcid"));
+    item.set("DOI", verbatim(entry, "doi"));
+    item.set("ISBN", verbatim(entry, "isbn"));
+    item.set("ISSN", verbatim(entry, "issn"));
+    item.set("PMID", verbatim(entry, "pmid"));
+    item.set("PMCID", verbatim(entry, "pmcid"));
     item.set("call-number", text(entry, "library"));
 }
 
@@ -398,16 +453,7 @@ fn notes(entry: &Entry, item: &mut Fields) {
         }
     }
     let language = text(entry, "langid").or_else(|| text(entry, "hyphenation"));
-    item.set(
-        "language",
-        language.map(|name| {
-            let key = name.to_ascii_lowercase();
-            LANGUAGES
-                .iter()
-                .find(|(bib, _)| *bib == key)
-                .map_or(name, |(_, code)| code.to_string())
-        }),
-    );
+    item.set("language", language.map(|name| language_code(&name)));
 }
 
 /// "First. Second", with only a space when the first already ends a sentence.
@@ -427,6 +473,7 @@ fn names(entry: &Entry, item: &mut Fields) {
         Some("director") => "director",
         _ => "editor",
     };
+    let use_prefix = has_option(entry, "useprefix");
     for (field, variable) in [
         ("author", "author"),
         ("editor", editor_variable),
@@ -437,17 +484,33 @@ fn names(entry: &Entry, item: &mut Fields) {
         let Ok(persons) = entry.get_as::<Vec<biblatex::Person>>(field) else {
             continue;
         };
-        let values: Vec<NameValue> = persons.iter().map(name_value).collect();
+        let values: Vec<NameValue> = persons
+            .iter()
+            .map(|person| name_value(person, use_prefix))
+            .collect();
         if !values.is_empty() {
             item.0.insert(variable.to_string(), Value::Names(values));
         }
     }
 }
 
+/// Whether the entry's `options` field sets the option: `useprefix` alone or
+/// `useprefix=true`, in a comma-separated list.
+fn has_option(entry: &Entry, option: &str) -> bool {
+    text(entry, "options").is_some_and(|options| {
+        options.split(',').any(|setting| {
+            let mut parts = setting.splitn(2, '=');
+            let key = parts.next().unwrap_or_default().trim();
+            let value = parts.next().map_or("true", str::trim);
+            key.eq_ignore_ascii_case(option) && value.eq_ignore_ascii_case("true")
+        })
+    })
+}
+
 /// One name. A name the parser could not split, "{Copernicus Climate Change
 /// Service}", is a literal name. A particle is a dropping particle, as
-/// Pandoc takes it, unless the name says `useprefix`.
-fn name_value(person: &biblatex::Person) -> NameValue {
+/// Pandoc takes it, unless the name or the entry's options say `useprefix`.
+fn name_value(person: &biblatex::Person, use_prefix: bool) -> NameValue {
     let family = unlatex(&person.name);
     let given = unlatex(&person.given_name);
     let particle = unlatex(&person.prefix);
@@ -459,9 +522,9 @@ fn name_value(person: &biblatex::Person) -> NameValue {
     {
         return NameValue::Literal(LiteralName { literal: family });
     }
-    let (non_dropping, dropping) = match person.use_prefix {
-        Some(true) => (Some(particle), None),
-        _ => (None, Some(particle)),
+    let (non_dropping, dropping) = match person.use_prefix.unwrap_or(use_prefix) {
+        true => (Some(particle), None),
+        false => (None, Some(particle)),
     };
     NameValue::Item(NameItem {
         family,
@@ -559,6 +622,84 @@ fn text(entry: &Entry, field: &str) -> Option<String> {
     (!value.is_empty()).then_some(value)
 }
 
+/// A title field's text, in sentence case when asked.
+fn titled(entry: &Entry, field: &str, sentence_case: bool) -> Option<String> {
+    if !sentence_case {
+        return text(entry, field);
+    }
+    let value = unlatex(&sentence_case_of(entry.get(field)?));
+    (!value.is_empty()).then_some(value)
+}
+
+/// A title in sentence case, by the rule Pandoc applies: a word is lowered
+/// only when its first letter is its only capital, so "NASA", "McDonald" and
+/// "iPhone" stay; the first word, and the first after ":", "?" or "!", gets
+/// a capital unless it has one of its own, as "eBay"; a hyphen ends a word;
+/// what braces protect stays as written.
+fn sentence_case_of(chunks: ChunksRef) -> String {
+    let mut out = String::new();
+    let mut sentence_start = true;
+    for chunk in chunks {
+        match &chunk.v {
+            Chunk::Normal(text) => {
+                let mut word = String::new();
+                for c in text.chars() {
+                    if c.is_alphanumeric() || c == '\'' || c == '\u{2019}' {
+                        word.push(c);
+                        continue;
+                    }
+                    flush_word(&mut word, &mut out, &mut sentence_start);
+                    out.push(c);
+                    if matches!(c, ':' | '?' | '!') {
+                        sentence_start = true;
+                    }
+                }
+                flush_word(&mut word, &mut out, &mut sentence_start);
+            }
+            Chunk::Verbatim(text) => {
+                out.push_str(text);
+                sentence_start = false;
+            }
+            Chunk::Math(text) => {
+                out.push('$');
+                out.push_str(text);
+                out.push('$');
+                sentence_start = false;
+            }
+        }
+    }
+    out
+}
+
+/// Appends the word in its sentence-case form and clears it: capitalised at
+/// a sentence start when it has no capital, lowered when its first letter is
+/// its only capital, otherwise as written.
+fn flush_word(word: &mut String, out: &mut String, sentence_start: &mut bool) {
+    if word.is_empty() {
+        return;
+    }
+    let mut chars = word.chars();
+    let first_is_capital = chars.next().is_some_and(char::is_uppercase);
+    let rest_has_capital = chars.any(char::is_uppercase);
+    if *sentence_start && !first_is_capital && !rest_has_capital {
+        let mut chars = word.chars();
+        out.extend(chars.next().into_iter().flat_map(char::to_uppercase));
+        out.extend(chars);
+    } else if !*sentence_start && first_is_capital && !rest_has_capital {
+        out.push_str(&word.to_lowercase());
+    } else {
+        out.push_str(word);
+    }
+    word.clear();
+    *sentence_start = false;
+}
+
+/// An identifier field as written: a URL or DOI keeps its "~" and "'".
+fn verbatim(entry: &Entry, field: &str) -> Option<String> {
+    let value = entry.get(field)?.format_verbatim().trim().to_string();
+    (!value.is_empty()).then_some(value)
+}
+
 /// A field that BibLaTeX lists with `and`, as its parts.
 fn list(entry: &Entry, field: &str) -> Vec<String> {
     match entry.get_as::<Vec<Chunks>>(field) {
@@ -577,12 +718,22 @@ fn plain(chunks: ChunksRef) -> String {
 }
 
 /// Text with TeX's conventions resolved: "--" an en dash, "---" an em dash,
-/// "~" a no-break space, an escaped character the character itself.
+/// "~" a no-break space, an escaped character the character itself, quotes
+/// and apostrophes the typographic ones.
 fn unlatex(raw: &str) -> String {
     let mut out = String::with_capacity(raw.len());
     let mut chars = raw.chars().peekable();
     while let Some(c) = chars.next() {
         match c {
+            '`' if chars.peek() == Some(&'`') => {
+                chars.next();
+                out.push('\u{201c}');
+            }
+            '\'' if chars.peek() == Some(&'\'') => {
+                chars.next();
+                out.push('\u{201d}');
+            }
+            '\'' => out.push('\u{2019}'),
             '-' if chars.peek() == Some(&'-') => {
                 chars.next();
                 if chars.peek() == Some(&'-') {
@@ -608,7 +759,7 @@ mod tests {
 
     fn item(bib: &str) -> Item {
         let bibliography = biblatex::Bibliography::parse(bib).unwrap();
-        item_of(bibliography.iter().next().unwrap())
+        item_of(bibliography.iter().next().unwrap(), true)
     }
 
     fn string<'a>(item: &'a Item, name: &str) -> Option<&'a str> {
@@ -663,8 +814,8 @@ mod tests {
         );
         assert_eq!(string(&item, "id"), Some("doe2020"));
         assert_eq!(string(&item, "type"), Some("article-journal"));
-        assert_eq!(string(&item, "title"), Some("A Study: Of Lists"));
-        assert_eq!(string(&item, "title-short"), Some("A Study"));
+        assert_eq!(string(&item, "title"), Some("A study: Of lists"));
+        assert_eq!(string(&item, "title-short"), Some("A study"));
         assert_eq!(string(&item, "container-title"), Some("J. Stud."));
         assert_eq!(string(&item, "volume"), Some("3"));
         assert_eq!(string(&item, "issue"), Some("2"));
@@ -803,7 +954,7 @@ mod tests {
         assert_eq!(string(&chapter, "edition"), Some("2"));
         assert_eq!(names(&chapter, "container-author"), ["Doe|Jane|||"]);
         let volume = item("@book{k, title={Vol. 2}, maintitle={Collected Works}, volume={2}}");
-        assert_eq!(string(&volume, "title"), Some("Collected Works"));
+        assert_eq!(string(&volume, "title"), Some("Collected works"));
         assert_eq!(string(&volume, "volume-title"), Some("Vol. 2"));
     }
 
@@ -817,5 +968,105 @@ mod tests {
             Some("Café NASA \u{2014} a tale, 1\u{2013}2 & more\u{a0}here")
         );
         assert_eq!(names(&item, "author"), ["Müller|Hans|||"]);
+    }
+
+    #[test]
+    fn english_titles_go_to_sentence_case_and_braces_protect() {
+        let english = item(
+            "@incollection{k, title={The Alot Is Better Than {You} at Everything}, \
+             booktitle={Collected {NASA} Posts}, series={Great Series}}",
+        );
+        assert_eq!(
+            string(&english, "title"),
+            Some("The alot is better than You at everything")
+        );
+        assert_eq!(
+            string(&english, "container-title"),
+            Some("Collected NASA posts")
+        );
+        assert_eq!(string(&english, "collection-title"), Some("Great series"));
+        let german = item("@book{k, title={Die Welt Als Wille}, langid={german}}");
+        assert_eq!(string(&german, "title"), Some("Die Welt Als Wille"));
+        let bibliography =
+            biblatex::Bibliography::parse("@book{k, title={Die Welt Als Wille}}").unwrap();
+        let in_german_document = item_of(bibliography.iter().next().unwrap(), false);
+        assert_eq!(
+            string(&in_german_document, "title"),
+            Some("Die Welt Als Wille")
+        );
+        let article = item("@article{k, title={T}, journal={Journal of Studies}}");
+        assert_eq!(
+            string(&article, "container-title"),
+            Some("Journal of Studies")
+        );
+    }
+
+    #[test]
+    fn a_short_title_is_the_part_before_the_colon() {
+        let colon = item("@book{k, title={Molecular Cloning: A Laboratory Manual}}");
+        assert_eq!(
+            string(&colon, "title"),
+            Some("Molecular cloning: A laboratory manual")
+        );
+        assert_eq!(string(&colon, "title-short"), Some("Molecular cloning"));
+        let plain = item("@book{k, title={No Colon Here}}");
+        assert_eq!(string(&plain, "title-short"), None);
+    }
+
+    #[test]
+    fn the_entry_options_set_useprefix_for_every_name() {
+        let on =
+            item("@misc{k, title={T}, author={van Dijk, Dirk}, options={doi=false, useprefix}}");
+        assert_eq!(names(&on, "author"), ["Dijk|Dirk|van||"]);
+        let off = item("@misc{k, title={T}, author={van Dijk, Dirk}, options={useprefix=false}}");
+        assert_eq!(names(&off, "author"), ["Dijk|Dirk||van|"]);
+    }
+
+    #[test]
+    fn apostrophes_and_quotes_turn_typographic_but_identifiers_stay() {
+        let item = item(
+            "@misc{k, title={Shin'ya's ``Quoted'' Words}, author={Shin'ya, Ono}, \
+             url={https://x.org/~me/it's}, doi={10.1/a'b}}",
+        );
+        assert_eq!(
+            string(&item, "title"),
+            Some("Shin\u{2019}ya\u{2019}s \u{201c}quoted\u{201d} words")
+        );
+        assert_eq!(names(&item, "author"), ["Shin\u{2019}ya|Ono|||"]);
+        assert_eq!(string(&item, "URL"), Some("https://x.org/~me/it's"));
+        assert_eq!(string(&item, "DOI"), Some("10.1/a'b"));
+    }
+
+    #[test]
+    fn sentence_case_lowers_only_words_with_a_single_leading_capital() {
+        let cases = [
+            (
+                "DNA Repair and the NASA Archive",
+                "DNA repair and the NASA archive",
+            ),
+            ("COVID-19 and the Lab", "COVID-19 and the lab"),
+            ("World War II Records", "World war II records"),
+            (
+                "iPhone Apps and McDonald Stories",
+                "iPhone apps and McDonald stories",
+            ),
+            ("eBay Markets", "eBay markets"),
+            ("Why Cite? A Short Answer", "Why cite? A short answer"),
+            (
+                "Molecular cloning: a laboratory manual",
+                "Molecular cloning: A laboratory manual",
+            ),
+            ("molecular cloning", "Molecular cloning"),
+            (
+                "Long-Term Effects of Self-Citation",
+                "Long-term effects of self-citation",
+            ),
+            ("Walking in {London} Today", "Walking in London today"),
+            ("A Study of I and You", "A study of i and you"),
+        ];
+        for (title, expected) in cases {
+            let entry = item(&format!("@book{{k, title={{{title}}}}}"));
+            assert_eq!(string(&entry, "title"), Some(expected), "{title}");
+        }
     }
 }

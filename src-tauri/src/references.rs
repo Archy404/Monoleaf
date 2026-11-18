@@ -82,13 +82,16 @@ impl Read {
 /// library. So the file is then read entry by entry: what parses is kept,
 /// and each entry skipped gives a warning with its line.
 pub fn references_from_biblatex(text: &str) -> References {
-    read_biblatex(text).summaries()
+    read_biblatex(text, true).summaries()
 }
 
 /// The `.bib` file's entries in full, see references_from_biblatex.
-pub fn read_biblatex(text: &str) -> Read {
+pub fn read_biblatex(text: &str, english_document: bool) -> Read {
     if let Ok(bibliography) = biblatex::Bibliography::parse(text) {
-        let items = bibliography.iter().map(biblatex_csl::item_of).collect();
+        let items = bibliography
+            .iter()
+            .map(|entry| biblatex_csl::item_of(entry, english_document))
+            .collect();
         return collect_items(items, ReferenceFormat::Bib);
     }
     let mut found = Read::default();
@@ -116,7 +119,7 @@ pub fn read_biblatex(text: &str) -> Read {
                 ));
                 continue;
             }
-            let mut item = biblatex_csl::item_of(raw);
+            let mut item = biblatex_csl::item_of(raw, english_document);
             normalise_dates(&mut item, found.references.len(), &mut found.warnings);
             found.references.push(Reference {
                 item,
@@ -275,6 +278,7 @@ pub fn read_bibliography(
     document_dir: &Path,
     path: &str,
     allow_network: bool,
+    english_document: bool,
 ) -> Result<Read, String> {
     let file = bibliography_file(document_dir, path)?;
     let file_str = file.to_string_lossy();
@@ -300,7 +304,7 @@ pub fn read_bibliography(
         .and_then(|e| e.to_str())
         .map(str::to_ascii_lowercase)
     {
-        Some(ext) if ext == "bib" => Ok(read_biblatex(&text)),
+        Some(ext) if ext == "bib" => Ok(read_biblatex(&text, english_document)),
         Some(ext) if ext == "json" => read_csl_json(&text),
         _ => read_csl_yaml(&text),
     }
@@ -376,6 +380,19 @@ pub fn load_summaries(
     load_references(document_path, front_matter, allow_network).summaries()
 }
 
+/// A string the header gives under `key`, `csl: apa`; absent or no string
+/// gives `None`.
+pub fn header_string(front_matter: &str, key: &str) -> Option<String> {
+    let document: yaml_serde::Value = yaml_serde::from_str(front_matter).ok()?;
+    document.get(key)?.as_str().map(str::to_string)
+}
+
+/// Whether the document's `lang:` is English or absent, as Pandoc decides
+/// whether a `.bib` title goes to sentence case.
+fn is_english_document(front_matter: &str) -> bool {
+    header_string(front_matter, "lang").is_none_or(|lang| lang.trim().starts_with("en"))
+}
+
 pub fn load_references(
     document_path: Option<&str>,
     front_matter: &str,
@@ -396,9 +413,10 @@ pub fn load_references(
         loaded.add("header", Ok(inline));
     }
     let dir = document_path.map(Path::new).and_then(Path::parent);
+    let english = is_english_document(front_matter);
     for path in bibliography_paths(front_matter).unwrap_or_default() {
         let result = match dir {
-            Some(dir) => read_bibliography(dir, &path, allow_network),
+            Some(dir) => read_bibliography(dir, &path, allow_network, english),
             None => Err(format!(
                 "{path}: save the document first, the path is relative to it"
             )),
@@ -684,7 +702,7 @@ mod tests {
             "references:\n- id: y\n  title: From YAML\n",
         )
         .unwrap();
-        let read = |path: &str| read_bibliography(&dir, path, false);
+        let read = |path: &str| read_bibliography(&dir, path, false, true);
         let summary = |path: &str| read(path).unwrap().summaries().entries;
         assert_eq!(summary("lib/refs.bib").len(), 3);
         assert_eq!(summary("refs.json")[0].title, "From JSON");

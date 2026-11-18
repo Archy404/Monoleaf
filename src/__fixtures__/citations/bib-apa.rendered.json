@@ -9,12 +9,12 @@
     {
       "key": "doe2020",
       "label": null,
-      "html": "Doe, J., & Roe, R. (2020). A Study of Reference Lists. <span style=\"font-style: italic;\">Journal of Studies</span>, <span style=\"font-style: italic;\">3</span>(2), 1–9. <a href=\"https://doi.org/10.1000/jos.2020.3\">https://doi.org/10.1000/jos.2020.3</a>"
+      "html": "Doe, J., & Roe, R. (2020). A study of reference lists. <span style=\"font-style: italic;\">Journal of Studies</span>, <span style=\"font-style: italic;\">3</span>(2), 1–9. <a href=\"https://doi.org/10.1000/jos.2020.3\">https://doi.org/10.1000/jos.2020.3</a>"
     },
     {
       "key": "smith2019",
       "label": null,
-      "html": "Smith, J. (2019). <span style=\"font-style: italic;\">The Book of Citations</span>. Example Press."
+      "html": "Smith, J. (2019). <span style=\"font-style: italic;\">The book of citations</span>. Example Press."
     }
   ],
   "hangingIndent": true,

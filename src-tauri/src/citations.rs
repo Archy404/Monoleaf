@@ -4,7 +4,7 @@
 //! of the bundled Citation Style Language styles, `lang:` picks the locale.
 //! Custom style files are not read; a style name is all the header can give.
 
-use crate::references::{self, Reference};
+use crate::references::{self, header_string, Reference};
 use hayagriva::archive::{locales, ArchivedStyle};
 use hayagriva::citationberg::taxonomy::{Locator, Term};
 use hayagriva::citationberg::{
@@ -389,13 +389,6 @@ pub fn render(
     out
 }
 
-/// A string the header gives under `key`, `csl: apa`; absent or no string
-/// gives `None`.
-fn header_string(front_matter: &str, key: &str) -> Option<String> {
-    let document: yaml_serde::Value = yaml_serde::from_str(front_matter).ok()?;
-    document.get(key)?.as_str().map(str::to_string)
-}
-
 /// The export's one call: reads the references the header names, takes the
 /// style and the locale from the header, and renders. The loader's warnings
 /// come first in the result, each named after its source.
@@ -493,7 +486,7 @@ mod tests {
 
     #[test]
     fn bib_and_csl_references_share_one_numbering() {
-        let mut references = read_biblatex(BIB).references;
+        let mut references = read_biblatex(BIB, true).references;
         references.extend(read_csl_yaml(ISSUE_EXAMPLE).unwrap().references);
         let mut page = cite(&["doe2020"]);
         page.items[0].suffix = "3".into();
@@ -517,7 +510,7 @@ mod tests {
 
     #[test]
     fn prefix_suffix_locator_and_suppressed_author_print_as_pandoc_does() {
-        let references = read_biblatex(BIB).references;
+        let references = read_biblatex(BIB, true).references;
         let mut seen = cite(&["doe2020"]);
         seen.items[0].prefix = "see".into();
         seen.items[0].suffix = "chap. 2, emphasis added".into();
@@ -566,7 +559,7 @@ mod tests {
 
     #[test]
     fn locator_terms_come_from_the_locale_and_english() {
-        let references = read_biblatex(BIB).references;
+        let references = read_biblatex(BIB, true).references;
         let texts = [
             "pp. 3-5, emphasis added",
             "Kap 2",

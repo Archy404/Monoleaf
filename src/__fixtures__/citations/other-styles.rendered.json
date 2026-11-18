@@ -8,12 +8,12 @@
     {
       "key": "doe2020",
       "label": "1.",
-      "html": "A Study of Reference Lists. Journal of Studies. 2020 ;3(2):1–9. doi:<a href=\"https://doi.org/10.1000/jos.2020.3\">10.1000/jos.2020.3</a>"
+      "html": "A study of reference lists. Journal of Studies. 2020 ;3(2):1–9. doi:<a href=\"https://doi.org/10.1000/jos.2020.3\">10.1000/jos.2020.3</a>"
     },
     {
       "key": "smith2019",
       "label": "2.",
-      "html": "The Book of Citations. Berlin: Example Press; 2019."
+      "html": "The book of citations. Berlin: Example Press; 2019."
     }
   ],
   "hangingIndent": false,
