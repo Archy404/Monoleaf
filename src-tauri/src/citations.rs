@@ -15,6 +15,7 @@ use hayagriva::{
     CitePurpose, Elem, ElemChild, ElemChildren, Formatted, LocatorPayload, SpecificLocator,
 };
 use std::collections::HashMap;
+use std::panic::{catch_unwind, AssertUnwindSafe};
 use std::sync::OnceLock;
 
 /// Pandoc's default when the header names no style.
@@ -444,7 +445,17 @@ pub fn render(
         driver.citation(request);
     }
     let request = BibliographyRequest::new(style, Some(locale.clone()), locales);
-    let rendered = driver.finish(request);
+    // hayagriva 0.10 panics in MLA's name disambiguation when one cited
+    // work's author list is the start of another's; the panic stays on this
+    // thread, and the citations stay as written.
+    let Ok(rendered) = catch_unwind(AssertUnwindSafe(|| driver.finish(request))) else {
+        out.warnings.push(
+            "the citation library failed on these citations in this style; \
+             they stay as written"
+                .to_string(),
+        );
+        return out;
+    };
     for ((index, _), citation) in cited.iter().zip(rendered.citations) {
         let text = html(&citation.citation);
         let text = decorate(text, &citations[*index], &suffixes[*index], style);
@@ -731,6 +742,33 @@ mod tests {
             assert!(out.citations[0].is_some(), "{setting}");
             assert_eq!(out.bibliography.is_empty(), suppressed, "{setting}");
         }
+    }
+
+    #[test]
+    fn a_failing_style_warns_and_leaves_the_citations_as_written() {
+        // Two works whose shorter author list is the start of the longer one
+        // make hayagriva 0.10's MLA disambiguation index past the list.
+        let refs = read_csl_yaml(
+            "- id: a2012\n  type: article-journal\n  title: Forcing\n  issued: 2012\n  author:\n  \
+             - family: Andrews\n    given: Timothy\n  - family: Gregory\n    given: Jonathan\n  \
+             - family: Webb\n    given: Mark\n  - family: Taylor\n    given: Karl\n\
+             - id: a2015\n  type: article-journal\n  title: Feedback\n  issued: 2015\n  author:\n  \
+             - family: Andrews\n    given: Timothy\n  - family: Gregory\n    given: Jonathan\n  \
+             - family: Webb\n    given: Mark\n",
+        )
+        .unwrap();
+        let style = style_named(Some("modern-language-association")).unwrap();
+        let locale = locale_named(None, &style);
+        let out = render(
+            &refs.references,
+            &style,
+            &locale,
+            &[cite(&["a2012"]), cite(&["a2015"])],
+        );
+        assert_eq!(out.citations, vec![None, None]);
+        assert!(out.bibliography.is_empty());
+        assert_eq!(out.warnings.len(), 1, "{:?}", out.warnings);
+        assert!(out.warnings[0].contains("failed"));
     }
 
     /// The header of a fixture document, between its `---` lines.
