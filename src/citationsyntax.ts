@@ -29,14 +29,16 @@ const KEY_CHAR = /[A-Za-z0-9_:.#$%&\-+?<>~/]/;
 /**
  * The citation whose key spans `pos`, or null. The key may be empty when the
  * cursor sits right after a fresh `@`, which is what completion waits for.
- * A `@` that follows a letter or digit is part of an e-mail address.
+ * A `@` that follows a letter or digit is part of an e-mail address; one
+ * after a backslash is escaped, as in pandoc and as Markdown reads `\@`.
  */
 export function citationAt(text: string, pos: number): Citation | null {
   let start = pos;
   while (start > 0 && KEY_CHAR.test(text[start - 1])) start--;
   const at = start - 1;
   if (text[at] !== "@") return null;
-  if (at > 0 && KEY_START.test(text[at - 1])) return null;
+  if (at > 0 && (KEY_START.test(text[at - 1]) || text[at - 1] === "\\"))
+    return null;
   if (start < text.length && !KEY_START.test(text[start]) && start < pos)
     return null;
   let end = pos;

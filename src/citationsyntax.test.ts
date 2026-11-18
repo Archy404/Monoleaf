@@ -5,6 +5,7 @@ import {
   segmentLists,
   type CitedItem,
   namesReferences,
+  citationAt,
 } from "./citationsyntax";
 
 const item = (key: string, rest: Partial<CitedItem> = {}): CitedItem => ({
@@ -13,6 +14,16 @@ const item = (key: string, rest: Partial<CitedItem> = {}): CitedItem => ({
   suffix: "",
   suppressAuthor: false,
   ...rest,
+});
+
+describe("an escaped @", () => {
+  it("is no citation, in the text and under the cursor", () => {
+    expect(findCitations("Ping \\@bob [on Slack](x) and [@a].")).toEqual([
+      { from: 29, to: 33, items: [item("a")], inText: false },
+    ]);
+    expect(citationAt("Ping \\@bob now", 8)).toBeNull();
+    expect(citationAt("Ping @bob now", 8)).not.toBeNull();
+  });
 });
 
 describe("namesReferences", () => {
