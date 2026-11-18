@@ -416,17 +416,18 @@ function referenceClasses(rendered: RenderedCitations, own: string[]): string {
   return [...new Set([...own, ...ours])].join(" ");
 }
 
+/** A refs block or a citation of a parse, by the citation's index. */
+type DocumentEvent = { kind: "block" } | { kind: "cite"; index: number };
+
 /**
- * The refs blocks and citations of a parse in document order, as
- * segmentLists takes them; a footnote's citations stand at its first mark.
+ * The refs blocks and citations of a parse in document order, as pandoc
+ * reads it: a footnote's text stands at its first mark, not at the end of
+ * the file where markdown-it collects the footnotes.
  */
-function segmentEvents(
-  tokens: Token[],
-  citations: readonly ParsedCitation[],
-): SegmentEvent[] {
-  const events: SegmentEvent[] = [];
+function documentEvents(tokens: Token[]): DocumentEvent[] {
+  const events: DocumentEvent[] = [];
   const marks: { at: number; id: number }[] = [];
-  const inFootnote = new Map<number, SegmentEvent[]>();
+  const inFootnote = new Map<number, DocumentEvent[]>();
   let footnote: number | null = null;
   for (const token of tokens) {
     if (token.type === "footnote_open")
@@ -436,11 +437,8 @@ function segmentEvents(
       events.push({ kind: "block" });
     for (const child of token.children ?? []) {
       if (child.type === "citation") {
-        const citation = citations[(child.meta as { index: number }).index];
-        const event: SegmentEvent = {
-          kind: "cite",
-          keys: citation.items.map((item) => item.key),
-        };
+        const index = (child.meta as { index: number }).index;
+        const event: DocumentEvent = { kind: "cite", index };
         if (footnote === null) events.push(event);
         else
           inFootnote.set(footnote, [
@@ -461,6 +459,18 @@ function segmentEvents(
     events.splice(at, 0, ...(inFootnote.get(id) ?? []));
   }
   return events;
+}
+
+/** The citations' indices in document order, as the backend numbers them;
+ * a citation the document does not print, in an unused footnote, last. */
+function citationOrder(
+  events: readonly DocumentEvent[],
+  count: number,
+): number[] {
+  const order = events.flatMap((e) => (e.kind === "cite" ? [e.index] : []));
+  const placed = new Set(order);
+  for (let i = 0; i < count; i++) if (!placed.has(i)) order.push(i);
+  return order;
 }
 
 /**
@@ -962,18 +972,27 @@ export async function renderDocumentHtmlAsync(
   const tokens = md.parse(text, env);
   const sources = collectImageSources(tokens);
   const cited = env.citations ?? [];
+  const events = documentEvents(tokens);
+  // The backend numbers citations in the order it gets them.
+  const order = citationOrder(events, cited.length);
   // Images and citations load side by side; each is skipped when the
   // document has none, so the common case costs nothing extra.
   const [images, rendered] = await Promise.all([
     sources.length === 0 ? NO_LOCAL_IMAGES : loadImages(sources),
     cited.length === 0 || renderCitations === undefined
       ? null
-      : renderCitations(cited),
+      : renderCitations(order.map((i) => cited[i])),
   ]);
   if (rendered !== null) {
-    env.renderedCitations = rendered.citations;
-    const events = segmentEvents(tokens, cited);
-    const lists = segmentLists(events, refsegmentOn(frontMatter(markdown)));
+    const byIndex: (string | null)[] = [];
+    order.forEach((i, sent) => (byIndex[i] = rendered.citations[sent] ?? null));
+    env.renderedCitations = byIndex;
+    const keyed: SegmentEvent[] = events.map((e) =>
+      e.kind === "block"
+        ? e
+        : { kind: "cite", keys: cited[e.index].items.map((item) => item.key) },
+    );
+    const lists = segmentLists(keyed, refsegmentOn(frontMatter(markdown)));
     placeReferenceList(tokens, rendered, md.utils.escapeHtml, lists);
   }
   return renderTokens(md, tokens, env, images, sourceLines);

@@ -286,10 +286,20 @@ class LiveCitations {
   private request() {
     const key = this.currentKey;
     if (key === this.answeredKey || this.found.length === 0) return;
-    const header = frontMatter(this.view.state.doc.sliceString(0, 1 << 16));
-    const citations = this.found.map((f) => f.citation);
+    const state = this.view.state;
+    const header = frontMatter(state.doc.sliceString(0, 1 << 16));
+    // The backend numbers in the order it gets the citations: a footnote's
+    // stand at its mark, as pandoc reads them.
+    const at = this.found.map((f) => markPosition(state, f));
+    const order = this.found
+      .map((_, i) => i)
+      .sort((a, b) => at[a] - at[b] || this.found[a].from - this.found[b].from);
+    const citations = order.map((i) => this.found[i].citation);
     this.render(header, citations).then(
-      (result) => {
+      (sent) => {
+        const back: (string | null)[] = [];
+        order.forEach((i, n) => (back[i] = sent.citations[n] ?? null));
+        const result = { ...sent, citations: back };
         this.view.dispatch({ effects: rendered.of({ key, result }) });
       },
       () => {
@@ -407,6 +417,14 @@ const referenceList = StateField.define<{
   ],
 });
 
+/** Where a citation stands in reading order: a footnote's citation at the
+ * footnote's first mark, any other where it is written. */
+function markPosition(state: EditorState, found: Found): number {
+  const label = footnoteLabelAt(state, found.from);
+  const mark = label === null ? null : footnoteRefPos(state, label);
+  return mark ?? found.from;
+}
+
 /** What each block lists, as the export decides it: every work, or with
  * `refsegment` its chapter's works; a footnote's citations count at its
  * first mark. */
@@ -418,10 +436,8 @@ function blockLists(
   if (!refsegmentOn(header)) return blocks.map(() => null);
   const placed: { at: number; event: SegmentEvent }[] = collect(state).map(
     (f) => {
-      const label = footnoteLabelAt(state, f.from);
-      const mark = label === null ? null : footnoteRefPos(state, label);
       const keys = f.citation.items.map((item) => item.key);
-      return { at: mark ?? f.from, event: { kind: "cite", keys } };
+      return { at: markPosition(state, f), event: { kind: "cite", keys } };
     },
   );
   for (const block of blocks)

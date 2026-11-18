@@ -24,14 +24,14 @@
       "html": "M.-jun Kim, “Reference lists at scale,” PhD thesis, Example University, 2018."
     },
     {
-      "key": "nasa2021",
+      "key": "lee2024",
       "label": "[4]",
-      "html": "National Aeronautics and Space Administration, “Citing data sets,” NASA, TM-2021–1, 2021."
+      "html": "A. Lee, “Citations yet to come,” <span style=\"font-style: italic;\">Journal of Studies</span>, <span style=\"font-weight: bold;\">In press</span>."
     },
     {
-      "key": "lee2024",
+      "key": "nasa2021",
       "label": "[5]",
-      "html": "A. Lee, “Citations yet to come,” <span style=\"font-style: italic;\">Journal of Studies</span>, <span style=\"font-weight: bold;\">In press</span>."
+      "html": "National Aeronautics and Space Administration, “Citing data sets,” NASA, TM-2021–1, 2021."
     }
   ],
   "hangingIndent": false,

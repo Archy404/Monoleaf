@@ -342,6 +342,30 @@ describe("renderDocumentHtml", () => {
     });
   });
 
+  it("sends a footnote's citations at its mark, as pandoc numbers them", async () => {
+    const sent: string[] = [];
+    const html = await renderDocumentHtmlAsync(
+      "A [@a].[^1] B [@b].\n\n[^1]: Note [@c].\n",
+      "enhanced",
+      false,
+      () => Promise.resolve(new Map()),
+      (citations) => {
+        sent.push(...citations.map((c) => c.items[0].key));
+        return Promise.resolve({
+          citations: citations.map((_, n) => `[${n + 1}]`),
+          bibliography: [],
+          hangingIndent: false,
+          title: null,
+          warnings: [],
+        });
+      },
+    );
+    expect(sent).toEqual(["a", "c", "b"]);
+    // Each answer lands at its own citation: b is the third work.
+    expect(html).toContain('B <span class="citation">[3]</span>.');
+    expect(html).toContain('Note <span class="citation">[2]</span>.');
+  });
+
   it("puts the list before the footnotes when the document has no #refs block", async () => {
     const doc = "See [@a][^1].\n\n[^1]: Note\n";
     const html = await renderDocumentHtmlAsync(

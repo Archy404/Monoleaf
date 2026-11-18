@@ -177,6 +177,29 @@ describe("live citations", () => {
     expect(lists).toEqual(["a", "bc", "abc"]);
   });
 
+  it("sends a footnote's citations at its mark and shows each answer in place", async () => {
+    const sent: string[] = [];
+    const render: LiveRenderer = (_header, citations) => {
+      sent.push(...citations.map((c) => c.items[0].key));
+      return Promise.resolve({
+        citations: citations.map((_, n) => `[${n + 1}]`),
+        bibliography: [],
+        hangingIndent: false,
+        title: null,
+        warnings: [],
+      });
+    };
+    const doc = "A [@a].[^1] B [@b].\n\n[^1]: Note [@c].\n";
+    const view = open(doc, render);
+    view.dispatch({ selection: { anchor: doc.length } });
+    await settle();
+    expect(sent).toEqual(["a", "c", "b"]);
+    const shown = [...view.contentDOM.querySelectorAll(".cm-citation")].map(
+      (c) => c.textContent,
+    );
+    expect(shown).toEqual(["[1]", "[3]", "[2]"]);
+  });
+
   it("leaves a refs block alone without a list, in code and unclosed", async () => {
     const view = open("No citations.\n\n::: {#refs}\n:::\n", stub().render);
     await settle();
