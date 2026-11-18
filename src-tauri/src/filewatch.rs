@@ -232,6 +232,33 @@ mod tests {
     use std::sync::mpsc;
 
     #[test]
+    fn reference_watches_are_replaced_as_a_whole_and_trimmed_by_path() {
+        let dir = std::env::temp_dir().join(format!("ml-refwatch-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let paths: Vec<String> = ["a.bib", "b.json"]
+            .iter()
+            .map(|name| {
+                let path = dir.join(name);
+                std::fs::write(&path, "").unwrap();
+                path.to_string_lossy().into_owned()
+            })
+            .collect();
+        let held = ReferenceWatches(Mutex::new(HashMap::new()));
+        let count =
+            |held: &ReferenceWatches| held.0.lock().unwrap().values().map(Vec::len).sum::<usize>();
+        let watches = paths.iter().map(|p| start(p, |_| {}).unwrap()).collect();
+        held.replace("window-1", watches);
+        assert_eq!(count(&held), 2);
+        // Network paths switched off: only the watch that still passes stays.
+        held.retain(|path| path.ends_with("a.bib"));
+        assert_eq!(count(&held), 1);
+        // A header without files ends the window's watches.
+        held.replace("window-1", Vec::new());
+        assert_eq!(count(&held), 0);
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
     fn only_events_for_the_target_file_name_count() {
         let target = Path::new("/docs/notes.md");
         assert!(concerns_target(target, Path::new("/docs/notes.md")));

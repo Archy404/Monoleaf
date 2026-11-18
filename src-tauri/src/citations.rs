@@ -708,9 +708,15 @@ mod tests {
     }
 
     /// The header of a fixture document, between its `---` lines.
+    /// The header as the app's `frontMatter()` takes it, for LF and CRLF files.
     fn front_matter(text: &str) -> &str {
-        let body = text.strip_prefix("---\n").unwrap_or("");
-        body.split("\n---\n").next().unwrap_or("")
+        let (open, close) = if text.starts_with("---\r\n") {
+            ("---\r\n", "\r\n---\r\n")
+        } else {
+            ("---\n", "\n---\n")
+        };
+        let body = text.strip_prefix(open).unwrap_or("");
+        body.split(close).next().unwrap_or("")
     }
 
     /// The citation chain's Rust link (see src/citations.fixtures.test.ts):
