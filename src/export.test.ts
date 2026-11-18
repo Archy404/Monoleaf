@@ -12,6 +12,7 @@ import {
   renderStandaloneHtml,
   setPageConfigSpec,
   wrapStandaloneHtml,
+  tolerantRenderer,
 } from "./export";
 import { createDocumentState, serializeDocument } from "./document";
 import { cellDisplayHtml } from "./tablecell";
@@ -417,6 +418,27 @@ describe("renderDocumentHtml", () => {
     expect(html).toContain(
       "See [@doe2020, p. 3] and @roe, or mail jane@doe.org.",
     );
+  });
+
+  it("goes on with the citations as written when the backend refuses", async () => {
+    const refused = tolerantRenderer(() =>
+      Promise.reject(new Error('unknown citation style "foo"')),
+    );
+    const html = await renderDocumentHtmlAsync(
+      REFS + "See [@a, p. 3].\n\n::: {#refs}\n:::\n",
+      "enhanced",
+      false,
+      () => Promise.resolve(new Map()),
+      refused,
+    );
+    expect(html).toContain("See [@a, p. 3].");
+    expect(html).not.toContain('class="citation"');
+    expect(html).not.toContain("csl-entry");
+    const result = await refused([
+      { from: 0, to: 4, items: [], inText: false },
+    ]);
+    expect(result.warnings).toEqual(['Error: unknown citation style "foo"']);
+    expect(result.citations).toEqual([null]);
   });
 
   it("leaves @handles and their links alone when the header names no references", async () => {

@@ -392,6 +392,27 @@ export type CitationRenderer = (
   citations: readonly ParsedCitation[],
 ) => Promise<RenderedCitations>;
 
+/**
+ * A renderer that never rejects: when the backend refuses (an unknown style,
+ * a header it cannot read), the citations print as written and the refusal
+ * is the one warning, so the export goes on.
+ */
+export function tolerantRenderer(render: CitationRenderer): CitationRenderer {
+  return async (citations) => {
+    try {
+      return await render(citations);
+    } catch (err) {
+      return {
+        citations: citations.map(() => null),
+        bibliography: [],
+        hangingIndent: false,
+        title: null,
+        warnings: [String(err)],
+      };
+    }
+  };
+}
+
 type Token = ReturnType<InstanceType<typeof MarkdownIt>["parse"]>[number];
 
 /** The entries of the reference list as pandoc prints them: one

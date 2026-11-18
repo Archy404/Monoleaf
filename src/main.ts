@@ -147,6 +147,7 @@ import {
   renderDocumentHtmlAsync,
   type CitationRenderer,
   type RenderedCitations,
+  tolerantRenderer,
 } from "./export";
 import { fitImagesToPage, IMAGE_PAGE_SLACK_PX } from "./imagefit";
 import { embedFontsForExport } from "./fontEmbeds";
@@ -1851,29 +1852,20 @@ async function renderDocumentHtmlWithImages(
   return sanitizeDocumentHtml(html);
 }
 
-// The backend reads the files the header names and renders with hayagriva.
-// A failure (an unknown style, an unreadable header) does not stop the
-// export: the citations print as written and the reason joins the warnings.
+// The backend reads the files the header names and renders with hayagriva;
+// tolerantRenderer keeps a refusal from stopping the export.
 const renderCitationsForExport: (
   header: string,
   ...rest: Parameters<CitationRenderer>
 ) => ReturnType<CitationRenderer> = async (header, citations) => {
-  let rendered: RenderedCitations;
-  try {
-    rendered = await invoke<RenderedCitations>("render_citations", {
+  const render = tolerantRenderer((cited) =>
+    invoke<RenderedCitations>("render_citations", {
       documentPath: getCurrentDocumentPath(),
       frontMatter: header,
-      citations,
-    });
-  } catch (err) {
-    rendered = {
-      citations: citations.map(() => null),
-      bibliography: [],
-      hangingIndent: false,
-      title: null,
-      warnings: [String(err)],
-    };
-  }
+      citations: cited,
+    }),
+  );
+  const rendered = await render(citations);
   exportWarnings = rendered.warnings;
   return rendered;
 };
