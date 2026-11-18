@@ -33,6 +33,7 @@ import {
   segmentLists,
   type ParsedCitation,
   type SegmentEvent,
+  namesReferences,
 } from "./citationsyntax";
 import { footnoteLabelAt, footnoteRefPos } from "./footnotes";
 import type { RenderedCitations } from "./export";
@@ -79,8 +80,11 @@ const FRONT_MATTER_RE = /^---\r?\n[\s\S]*?\r?\n---/;
 /** Every citation of the document in order, as the export finds them: line
  * by line, code and the header skipped. */
 function collect(state: EditorState): Found[] {
-  const headerEnd =
-    FRONT_MATTER_RE.exec(state.doc.sliceString(0, 1 << 16))?.[0].length ?? 0;
+  const top = state.doc.sliceString(0, 1 << 16);
+  const header = FRONT_MATTER_RE.exec(top)?.[0] ?? "";
+  // Without references in the header a citation is text, as it was before.
+  if (!namesReferences(header)) return [];
+  const headerEnd = header.length;
   const found: Found[] = [];
   for (let n = 1; n <= state.doc.lines; n++) {
     const line = state.doc.line(n);

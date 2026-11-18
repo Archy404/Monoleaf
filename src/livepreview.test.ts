@@ -179,12 +179,25 @@ describe("silent WYSIWYG: markers hidden regardless of the cursor", () => {
   });
 
   it("leaves a citation's brackets alone: not a link, nothing hidden", () => {
-    const doc = "See [@doe, p. 3] and @roe [p. 3], then [t](https://e.com).";
+    const doc =
+      "---\nbibliography: r.bib\n---\nSee [@doe, p. 3] and @roe [p. 3], then [t](https://e.com).";
+    const link = doc.indexOf("[t]");
     const all = decos(doc, 0);
     expect(all.filter((d) => d.kind === "cm-live-link")).toEqual([
-      { from: 39, to: 57, kind: "cm-live-link" },
+      { from: link, to: link + 18, kind: "cm-live-link" },
     ]);
-    expect(all.filter((d) => d.kind === "hide" && d.from < 39)).toEqual([]);
+    const body = doc.indexOf("See");
+    expect(
+      all.filter((d) => d.kind === "hide" && d.from >= body && d.from < link),
+    ).toEqual([]);
+  });
+
+  it("treats a bracket as a link when the header names no references", () => {
+    const doc = "Follow [@alice](https://e.com) now.";
+    const all = decos(doc, 0);
+    expect(all.filter((d) => d.kind === "cm-live-link")).toEqual([
+      { from: 7, to: 30, kind: "cm-live-link" },
+    ]);
   });
 
   it("links carry their URL for Ctrl+click open-in-browser", () => {

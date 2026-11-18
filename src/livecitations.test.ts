@@ -36,6 +36,9 @@ function stub() {
 
 const settle = () => new Promise((resolve) => setTimeout(resolve, 10));
 
+// A header that names references: without one a citation is text.
+const REFS = "---\nbibliography: r.bib\n---\n\n";
+
 describe("live citations", () => {
   const views: EditorView[] = [];
   afterEach(() => {
@@ -62,7 +65,19 @@ describe("live citations", () => {
     );
 
   const DOC =
-    "---\ntitle: T\n---\n\nSee [@doe2020] here.\n\nAnd @roe [p. 3] there, `[@doe2020]` in code.\n";
+    "---\ntitle: T\nbibliography: r.bib\n---\n\nSee [@doe2020] here.\n\nAnd @roe [p. 3] there, `[@doe2020]` in code.\n";
+
+  it("asks for nothing and marks nothing when the header names no references", async () => {
+    const { calls, render } = stub();
+    const view = open(
+      "Ping @bob [on Slack](https://x.example) and [@doe2020].\n",
+      render,
+    );
+    await settle();
+    expect(calls).toEqual([]);
+    expect(shown(view)).toEqual([]);
+    expect(view.contentDOM.querySelector(".cm-citation-unknown")).toBeNull();
+  });
 
   it("shows the rendering off the cursor's line and the source on it", async () => {
     const { calls, render } = stub();
@@ -76,7 +91,10 @@ describe("live citations", () => {
   });
 
   it("marks a key the references do not have and keeps its source", async () => {
-    const view = open("Text [@nobody] here.\n\nNext line.\n", stub().render);
+    const view = open(
+      REFS + "Text [@nobody] here.\n\nNext line.\n",
+      stub().render,
+    );
     view.dispatch({ selection: { anchor: view.state.doc.length } });
     await settle();
     expect(shown(view)).toEqual([]);
@@ -122,7 +140,7 @@ describe("live citations", () => {
   });
 
   it("shows the reference list at the refs block and its source on it", async () => {
-    const doc = "See [@doe2020].\n\n::: {#refs}\n\n:::\n\nAfter.\n";
+    const doc = REFS + "See [@doe2020].\n\n::: {#refs}\n\n:::\n\nAfter.\n";
     const view = open(doc, stub().render);
     await settle();
     const list = view.contentDOM.querySelector(".cm-refs");
@@ -140,6 +158,7 @@ describe("live citations", () => {
 
   it("shows the list at every block, after what a block holds", async () => {
     const doc =
+      REFS +
       "[@doe2020]\n\n::: {#refs}\n:::\n\n::: {#refs}\nWorks cited:\n:::\n\nEnd.\n";
     const view = open(doc, stub().render);
     view.dispatch({ selection: { anchor: doc.length } });
@@ -165,7 +184,7 @@ describe("live citations", () => {
         warnings: [],
       });
     const doc =
-      "---\nrefsegment: true\n---\n\nOne [@a].\n\n::: {#refs}\n:::\n\n" +
+      "---\nbibliography: r.bib\nrefsegment: true\n---\n\nOne [@a].\n\n::: {#refs}\n:::\n\n" +
       "Two [@b].[^1]\n\n::: {#refs}\n:::\n\nThree [@a].\n\n::: {#refs}\n:::\n\n" +
       "[^1]: Note [@c].\n";
     const view = open(doc, render);
@@ -189,7 +208,7 @@ describe("live citations", () => {
         warnings: [],
       });
     };
-    const doc = "A [@a].[^1] B [@b].\n\n[^1]: Note [@c].\n";
+    const doc = REFS + "A [@a].[^1] B [@b].\n\n[^1]: Note [@c].\n";
     const view = open(doc, render);
     view.dispatch({ selection: { anchor: doc.length } });
     await settle();
@@ -201,10 +220,14 @@ describe("live citations", () => {
   });
 
   it("leaves a refs block alone without a list, in code and unclosed", async () => {
-    const view = open("No citations.\n\n::: {#refs}\n:::\n", stub().render);
+    const view = open(
+      REFS + "No citations.\n\n::: {#refs}\n:::\n",
+      stub().render,
+    );
     await settle();
     expect(view.contentDOM.querySelector(".cm-refs")).toBeNull();
     const code =
+      REFS +
       "[@doe2020]\n\n```\n::: {#refs}\n:::\n```\n\n::: {#refs}\n\nEnd.\n";
     const view2 = open(code, stub().render);
     view2.dispatch({ selection: { anchor: code.length } });

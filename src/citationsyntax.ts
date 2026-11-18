@@ -13,6 +13,16 @@ export interface Citation {
 
 // A pandoc key starts with a letter, digit or `_` and goes on with those and
 // internal punctuation; punctuation at the very end belongs to the sentence.
+/** A header line that names references: a `bibliography:` file or an inline
+ * `references:` list, at column 0 as pandoc reads them. */
+const NAMES_REFERENCES = /^(?:bibliography|references)\s*:/m;
+
+/** Whether the document asks for citations at all. Without references in
+ * the header, `@name` and `[@name]` are plain text, as they were before. */
+export function namesReferences(header: string): boolean {
+  return NAMES_REFERENCES.test(header);
+}
+
 const KEY_START = /[A-Za-z0-9_]/;
 const KEY_CHAR = /[A-Za-z0-9_:.#$%&\-+?<>~/]/;
 

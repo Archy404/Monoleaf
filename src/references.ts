@@ -6,6 +6,7 @@
  */
 
 import { invoke } from "@tauri-apps/api/core";
+import { namesReferences } from "./citationsyntax";
 import { frontMatter } from "./meta";
 
 /** COUPLED: `ReferenceSummary`, `Source` and `LoadedSummaries` in src-tauri/src/references.rs. */
@@ -38,8 +39,6 @@ type Loader = (path: string | null, header: string) => Promise<References>;
 
 const NONE: References = { entries: [], warnings: [], sources: [] };
 // The header keys that name references, at column 0 as pandoc reads them.
-const NAMES_REFERENCES = /^(?:bibliography|references)\s*:/m;
-
 let current = NONE;
 let loadedPath: string | null = null;
 let loadedHeader: string | null = null;
@@ -76,7 +75,7 @@ export async function syncReferences(
   // Always, so that a header that stopped naming files ends their watches. A
   // watch that cannot be set only means a change goes unnoticed.
   void watch(path, header).catch(() => {});
-  if (!NAMES_REFERENCES.test(header)) {
+  if (!namesReferences(header)) {
     current = NONE;
     return current;
   }

@@ -4,6 +4,7 @@ import {
   refsegmentOn,
   segmentLists,
   type CitedItem,
+  namesReferences,
 } from "./citationsyntax";
 
 const item = (key: string, rest: Partial<CitedItem> = {}): CitedItem => ({
@@ -12,6 +13,15 @@ const item = (key: string, rest: Partial<CitedItem> = {}): CitedItem => ({
   suffix: "",
   suppressAuthor: false,
   ...rest,
+});
+
+describe("namesReferences", () => {
+  it("is true for a bibliography file or an inline list at column 0", () => {
+    expect(namesReferences("title: T\nbibliography: refs.bib\n")).toBe(true);
+    expect(namesReferences("references:\n- id: a\n")).toBe(true);
+    expect(namesReferences("title: T\n  bibliography: x\n")).toBe(false);
+    expect(namesReferences("")).toBe(false);
+  });
 });
 
 describe("findCitations", () => {

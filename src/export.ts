@@ -12,6 +12,7 @@ import {
   segmentLists,
   type ParsedCitation,
   type SegmentEvent,
+  namesReferences,
 } from "./citationsyntax";
 import katexPluginImport from "@vscode/markdown-it-katex";
 import hljs from "highlight.js/lib/core";
@@ -369,6 +370,8 @@ function installAdmonitions(md: InstanceType<typeof MarkdownIt>): void {
 /** The citations a parse found, in document order, and what the backend
  * rendered for each; both live on `env` between parse and render. */
 type CitationEnv = {
+  /** Whether the header names references; without them a citation is text. */
+  citationsOn?: boolean;
   citations?: ParsedCitation[];
   renderedCitations?: readonly (string | null)[];
 };
@@ -633,6 +636,7 @@ function installCitations(md: InstanceType<typeof MarkdownIt>): void {
     "link",
     "ml_citation",
     (state: StateInline, silent: boolean) => {
+      if (!(state.env as CitationEnv).citationsOn) return false;
       const ch = state.src[state.pos];
       if (ch !== "[" && ch !== "@") return false;
       // The parser only sees the slice from here on, so the e-mail check on
@@ -945,7 +949,10 @@ export function renderDocumentHtml(
   localImages: ReadonlyMap<string, string> = NO_LOCAL_IMAGES,
 ): string {
   const { md, text } = buildRenderer(markdown, mode, sourceLines);
-  const env: RenderEnv = { localImages: NO_LOCAL_IMAGES };
+  const env: RenderEnv & CitationEnv = {
+    localImages: NO_LOCAL_IMAGES,
+    citationsOn: namesReferences(frontMatter(markdown)),
+  };
   const tokens = md.parse(text, env);
   return renderTokens(md, tokens, env, localImages, sourceLines);
 }
@@ -968,7 +975,10 @@ export async function renderDocumentHtmlAsync(
   renderCitations?: CitationRenderer,
 ): Promise<string> {
   const { md, text } = buildRenderer(markdown, mode, sourceLines);
-  const env: RenderEnv & CitationEnv = { localImages: NO_LOCAL_IMAGES };
+  const env: RenderEnv & CitationEnv = {
+    localImages: NO_LOCAL_IMAGES,
+    citationsOn: namesReferences(frontMatter(markdown)),
+  };
   const tokens = md.parse(text, env);
   const sources = collectImageSources(tokens);
   const cited = env.citations ?? [];

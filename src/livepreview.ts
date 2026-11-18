@@ -48,7 +48,7 @@ import { tableExtensions } from "./tablewidget";
 import { mathExtensions } from "./math";
 import { footnoteExtensions } from "./footnotes";
 import { liveCitations } from "./livecitations";
-import { findCitations } from "./citationsyntax";
+import { findCitations, namesReferences } from "./citationsyntax";
 import { markupRepair } from "./repair";
 import { formatShortcut } from "./platform";
 
@@ -546,7 +546,12 @@ export function buildLivePreviewDecorations(
   // citation plugin (livecitations.ts) renders them, and hiding their marks
   // here would collide with that. Citations are found per line, once.
   const citationsByLine = new Map<number, { from: number; to: number }[]>();
+  // Without references in the header a bracket is a link, as it was before.
+  const citationsOn = namesReferences(
+    state.doc.sliceString(0, frontmatterEnd(state)),
+  );
   const inCitation = (nodeFrom: number, nodeTo: number) => {
+    if (!citationsOn) return false;
     const line = state.doc.lineAt(nodeFrom);
     let found = citationsByLine.get(line.number);
     if (found === undefined) {

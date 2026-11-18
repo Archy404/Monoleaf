@@ -201,8 +201,12 @@ describe("renderDocumentHtml", () => {
     expect(html).toContain("a b c");
   });
 
+  // A header that names references: without one a citation is text.
+  const REFS = "---\nbibliography: r.bib\n---\n\n";
+
   it("renders citations through the backend and places the list at #refs", async () => {
-    const doc = "Text [@a, p. 3] and @b.\n\n::: {#refs}\n:::\n\nAfter.\n";
+    const doc =
+      REFS + "Text [@a, p. 3] and @b.\n\n::: {#refs}\n:::\n\nAfter.\n";
     const asked: string[][] = [];
     const html = await renderDocumentHtmlAsync(
       doc,
@@ -250,7 +254,7 @@ describe("renderDocumentHtml", () => {
       });
     const render = (doc: string) =>
       renderDocumentHtmlAsync(
-        doc,
+        REFS + doc,
         "enhanced",
         false,
         () => Promise.resolve(new Map()),
@@ -327,7 +331,7 @@ describe("renderDocumentHtml", () => {
             .join(","),
         );
     const doc = (header: string) =>
-      `---\n${header}---\n\nOne [@a].\n\n::: {#refs}\n:::\n\n` +
+      `---\nbibliography: r.bib\n${header}---\n\nOne [@a].\n\n::: {#refs}\n:::\n\n` +
       `Two [@b] and a note.[^1]\n\n::: {#refs}\n:::\n\nAppendix [@a].\n\n` +
       `::: {#refs}\n:::\n\n[^1]: The note cites [@c].\n`;
 
@@ -345,7 +349,7 @@ describe("renderDocumentHtml", () => {
   it("sends a footnote's citations at its mark, as pandoc numbers them", async () => {
     const sent: string[] = [];
     const html = await renderDocumentHtmlAsync(
-      "A [@a].[^1] B [@b].\n\n[^1]: Note [@c].\n",
+      REFS + "A [@a].[^1] B [@b].\n\n[^1]: Note [@c].\n",
       "enhanced",
       false,
       () => Promise.resolve(new Map()),
@@ -367,7 +371,7 @@ describe("renderDocumentHtml", () => {
   });
 
   it("puts the list before the footnotes when the document has no #refs block", async () => {
-    const doc = "See [@a][^1].\n\n[^1]: Note\n";
+    const doc = REFS + "See [@a][^1].\n\n[^1]: Note\n";
     const html = await renderDocumentHtmlAsync(
       doc,
       "strict",
@@ -407,11 +411,33 @@ describe("renderDocumentHtml", () => {
   });
 
   it("prints a citation as written until the backend renders it", () => {
-    const doc = "See [@doe2020, p. 3] and @roe, or mail jane@doe.org.\n";
+    const doc =
+      "---\nbibliography: r.bib\n---\n\nSee [@doe2020, p. 3] and @roe, or mail jane@doe.org.\n";
     const html = renderDocumentHtml(doc, "strict");
     expect(html).toContain(
       "See [@doe2020, p. 3] and @roe, or mail jane@doe.org.",
     );
+  });
+
+  it("leaves @handles and their links alone when the header names no references", async () => {
+    const doc =
+      "Follow [@alice](https://example.org/alice) and ping @bob [on Slack](https://slack.example/x).\n";
+    const html = renderDocumentHtml(doc, "enhanced");
+    expect(html).toContain('<a href="https://example.org/alice">@alice</a>');
+    expect(html).toContain('<a href="https://slack.example/x">on Slack</a>');
+    expect(html).not.toContain("citation");
+    let calls = 0;
+    await renderDocumentHtmlAsync(
+      doc,
+      "enhanced",
+      false,
+      () => Promise.resolve(new Map()),
+      () => {
+        calls++;
+        return Promise.reject(new Error("not expected"));
+      },
+    );
+    expect(calls).toBe(0);
   });
 
   it("strips the ml:meta comment block from the body", () => {
