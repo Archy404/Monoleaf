@@ -15,6 +15,7 @@ use hayagriva::{
     CitePurpose, Elem, ElemChild, ElemChildren, Formatted, LocatorPayload, SpecificLocator,
 };
 use std::collections::HashMap;
+use std::sync::OnceLock;
 
 /// Pandoc's default when the header names no style.
 const DEFAULT_STYLE: &str = "chicago-author-date";
@@ -113,6 +114,13 @@ const LOCATOR_KINDS: [Locator; 29] = [
 /// a page: the terms pandoc reads a locator by. The document's locale first,
 /// then English, so "S. 3" and "p. 3" both work in a German document. The
 /// longest term comes first, so "pp." is tried before "p.".
+/// hayagriva's bundled locales, parsed once: parsing them costs a tenth of a
+/// second, and every export and live-view render would pay it again.
+fn bundled_locales() -> &'static [Locale] {
+    static LOCALES: OnceLock<Vec<Locale>> = OnceLock::new();
+    LOCALES.get_or_init(locales)
+}
+
 fn locator_terms(locales: &[Locale], code: &LocaleCode) -> Vec<(String, Locator)> {
     let mut terms = Vec::new();
     for lang in [code, &LocaleCode::en_us()] {
@@ -340,8 +348,8 @@ pub fn render(
     for reference in references {
         by_key.entry(reference.key()).or_insert(&reference.item);
     }
-    let locales = locales();
-    let terms = locator_terms(&locales, locale);
+    let locales = bundled_locales();
+    let terms = locator_terms(locales, locale);
     // The suffix of each item once its locator is read out, for decorate().
     let suffixes: Vec<Vec<&str>> = citations
         .iter()
@@ -406,10 +414,10 @@ pub fn render(
                 }
             })
             .collect();
-        let request = CitationRequest::new(items, style, Some(locale.clone()), &locales, None);
+        let request = CitationRequest::new(items, style, Some(locale.clone()), locales, None);
         driver.citation(request);
     }
-    let request = BibliographyRequest::new(style, Some(locale.clone()), &locales);
+    let request = BibliographyRequest::new(style, Some(locale.clone()), locales);
     let rendered = driver.finish(request);
     for ((index, _), citation) in cited.iter().zip(rendered.citations) {
         let text = html(&citation.citation);
@@ -736,6 +744,48 @@ mod tests {
             seen += 1;
         }
         assert!(seen > 0, "no fixture documents in {}", dir.display());
+    }
+
+    /// Every bundled style with several locales, among them an unknown and
+    /// an empty one, renders the test references without a panic: hayagriva
+    /// panics on a date range, which the reader removes, and this sweep is
+    /// the net under the rest.
+    #[test]
+    fn every_bundled_style_renders_in_every_locale_without_a_panic() {
+        let mut references = read_biblatex(BIB, true).references;
+        references.extend(read_csl_yaml(ISSUE_EXAMPLE).unwrap().references);
+        let mut seen = cite(&["doe2020"]);
+        seen.items[0].prefix = "see".into();
+        seen.items[0].suffix = "p. 3, emphasis added".into();
+        let mut year = cite(&["doe2020"]);
+        year.items[0].suppress_author = true;
+        let mut prose = cite(&["ERA5LandHourlyData2019"]);
+        prose.in_text = true;
+        let group = cite(&["doe2020", "ERA5LandHourlyData2019", "nobody"]);
+        let cited = [seen, year, prose, group];
+        let mut styles = 0;
+        for archived in hayagriva::archive::ArchivedStyle::all() {
+            let Style::Independent(style) = archived.get() else {
+                continue;
+            };
+            styles += 1;
+            for lang in [None, Some("en-GB"), Some("de-DE"), Some("xx"), Some("")] {
+                let locale = locale_named(lang, &style);
+                let out = render(&references, &style, &locale, &cited);
+                assert_eq!(out.citations.len(), 4, "{}", archived.names()[0]);
+                assert!(
+                    out.citations[..3].iter().all(Option::is_some),
+                    "{} {lang:?}: {:?}",
+                    archived.names()[0],
+                    out.citations
+                );
+                // hayagriva's own alphanumeric style has no bibliography layout.
+                if style.bibliography.is_some() {
+                    assert_eq!(out.bibliography.len(), 2, "{}", archived.names()[0]);
+                }
+            }
+        }
+        assert_eq!(styles, 80);
     }
 
     #[test]
