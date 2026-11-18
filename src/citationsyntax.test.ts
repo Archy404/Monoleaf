@@ -1,5 +1,10 @@
 import { describe, expect, it } from "vitest";
-import { findCitations, type CitedItem } from "./citationsyntax";
+import {
+  findCitations,
+  refsegmentOn,
+  segmentLists,
+  type CitedItem,
+} from "./citationsyntax";
 
 const item = (key: string, rest: Partial<CitedItem> = {}): CitedItem => ({
   key,
@@ -58,5 +63,42 @@ describe("findCitations", () => {
     expect(found.map((c) => [c.inText, c.items[0].key])).toEqual([
       [true, "doe2020"],
     ]);
+  });
+});
+
+describe("refsegment", () => {
+  it("reads the flag as pandoc reads one", () => {
+    expect(refsegmentOn("csl: apa\nrefsegment: true\n")).toBe(true);
+    expect(refsegmentOn('refsegment: "Yes"')).toBe(true);
+    expect(refsegmentOn("refsegment: false\n")).toBe(false);
+    expect(refsegmentOn("csl: apa\n")).toBe(false);
+    expect(refsegmentOn("  refsegment: true\n")).toBe(false);
+  });
+
+  const cite = (...keys: string[]) => ({ kind: "cite" as const, keys });
+  const block = { kind: "block" as const };
+  const keys = (list: ReadonlySet<string> | null) =>
+    list === null ? "all" : [...list].join(",");
+
+  it("lists every work at every block without the flag", () => {
+    const events = [cite("a"), block, cite("b"), block];
+    expect(segmentLists(events, false).map(keys)).toEqual(["all", "all"]);
+  });
+
+  it("lists each chapter's works and every work at the last block", () => {
+    const events = [cite("a"), block, cite("b", "a"), block, cite("c"), block];
+    expect(segmentLists(events, true).map(keys)).toEqual(["a", "b,a", "all"]);
+  });
+
+  it("lists every work where nothing is cited before or after a block", () => {
+    const top = [block, cite("a"), block, cite("b"), block];
+    expect(segmentLists(top, true).map(keys)).toEqual(["all", "a", "all"]);
+    const tail = [cite("a"), block, block];
+    expect(segmentLists(tail, true).map(keys)).toEqual(["all", "all"]);
+  });
+
+  it("gives the appendix after the last block to the last block's full list", () => {
+    const events = [cite("a"), block, cite("b"), block, cite("c")];
+    expect(segmentLists(events, true).map(keys)).toEqual(["a", "all"]);
   });
 });

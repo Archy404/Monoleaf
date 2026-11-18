@@ -140,3 +140,43 @@ export function refsClasses(line: string): string[] {
   const attributes = REFS_OPEN_RE.exec(line)?.[1] ?? "";
   return [...attributes.matchAll(/(?:^|\s)\.([\w-]+)/g)].map((m) => m[1]);
 }
+
+/**
+ * Whether the header sets `refsegment` to true, biblatex's name for lists
+ * per segment: the boolean, or "t", "true" or "yes" in any case, as pandoc
+ * reads a flag. Pandoc itself does not know the key and ignores it.
+ */
+export function refsegmentOn(header: string): boolean {
+  const value = /^refsegment:[ \t]*(.*?)[ \t]*$/m.exec(header)?.[1] ?? "";
+  const text = value.replace(/^(["'])(.*)\1$/, "$2").toLowerCase();
+  return ["t", "true", "yes"].includes(text);
+}
+
+/** A refs block or a citation, in document order; a footnote's citations
+ * stand where its mark stands. */
+export type SegmentEvent =
+  { kind: "block" } | { kind: "cite"; keys: readonly string[] };
+
+/**
+ * What each refs block lists: null for every work, else the keys it holds.
+ * Without `refsegment` every block lists every work, as in pandoc. With it,
+ * a block lists the works cited since the previous block, or since the
+ * start; it lists every work when nothing is cited before it in that span or
+ * nothing after it at all, and the last block always lists every work.
+ */
+export function segmentLists(
+  events: readonly SegmentEvent[],
+  refsegment: boolean,
+): (ReadonlySet<string> | null)[] {
+  const blocks = events.flatMap((e, i) => (e.kind === "block" ? [i] : []));
+  if (!refsegment) return blocks.map(() => null);
+  return blocks.map((at, n) => {
+    if (n === blocks.length - 1) return null;
+    const start = n === 0 ? 0 : blocks[n - 1] + 1;
+    const keysOf = (span: readonly SegmentEvent[]) =>
+      span.flatMap((e) => (e.kind === "cite" ? e.keys : []));
+    const above = keysOf(events.slice(start, at));
+    const below = keysOf(events.slice(at + 1));
+    return above.length === 0 || below.length === 0 ? null : new Set(above);
+  });
+}
