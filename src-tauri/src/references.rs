@@ -286,6 +286,12 @@ pub fn read_bibliography(
     let file = bibliography_file(document_dir, path)?;
     let file_str = file.to_string_lossy();
     crate::validate_path(&file_str, allow_network)?;
+    // A link may point at a network share, and resolving it would make the
+    // system contact that host; the link's target is checked first.
+    if let Ok(target) = fs::read_link(&file) {
+        crate::validate_path(&target.to_string_lossy(), allow_network)
+            .map_err(|e| format!("{path}: {e}"))?;
+    }
     // A link inside the folder can still lead out of it; the resolved path
     // has to stay below the resolved folder.
     let resolved = fs::canonicalize(&file).map_err(|e| match e.kind() {
@@ -731,7 +737,22 @@ mod tests {
             std::os::unix::fs::symlink(&outside, dir.join("link.bib")).unwrap();
             assert!(read("link.bib").unwrap_err().ends_with("folder is read"));
             let _ = fs::remove_file(outside);
+            // A link to a share is refused before the system resolves it.
+            std::os::unix::fs::symlink(r"\\server\share\x.bib", dir.join("share.bib")).unwrap();
+            assert_eq!(
+                read("share.bib").unwrap_err(),
+                "share.bib: Network paths are not supported"
+            );
         }
+        // The size cap and the text check give their reasons.
+        fs::write(
+            dir.join("big.bib"),
+            vec![b' '; BIBLIOGRAPHY_MAX_BYTES as usize + 1],
+        )
+        .unwrap();
+        assert_eq!(read("big.bib").unwrap_err(), "big.bib: larger than 10 MB");
+        fs::write(dir.join("bytes.bib"), [0xff, 0xfe, b'@']).unwrap();
+        assert_eq!(read("bytes.bib").unwrap_err(), "bytes.bib: not UTF-8 text");
         let _ = fs::remove_dir_all(&dir);
     }
 
