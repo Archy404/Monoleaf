@@ -633,9 +633,10 @@ fn titled(entry: &Entry, field: &str, sentence_case: bool) -> Option<String> {
 
 /// A title in sentence case, by the rule Pandoc applies: a word is lowered
 /// only when its first letter is its only capital, so "NASA", "McDonald" and
-/// "iPhone" stay; the first word, and the first after ":", "?" or "!", gets
-/// a capital unless it has one of its own, as "eBay"; a hyphen ends a word;
-/// what braces protect stays as written.
+/// "iPhone" stay; the first word, and the first after a ":", "?" or "!"
+/// that ends a word (not the one in "a:b" or "http://"), gets a capital
+/// unless it has one of its own, as "eBay"; a hyphen ends a word; what
+/// braces protect stays as written.
 fn sentence_case_of(chunks: ChunksRef) -> String {
     let mut out = String::new();
     let mut sentence_start = true;
@@ -643,14 +644,16 @@ fn sentence_case_of(chunks: ChunksRef) -> String {
         match &chunk.v {
             Chunk::Normal(text) => {
                 let mut word = String::new();
-                for c in text.chars() {
+                let mut chars = text.chars().peekable();
+                while let Some(c) = chars.next() {
                     if c.is_alphanumeric() || c == '\'' || c == '\u{2019}' {
                         word.push(c);
                         continue;
                     }
                     flush_word(&mut word, &mut out, &mut sentence_start);
                     out.push(c);
-                    if matches!(c, ':' | '?' | '!') {
+                    let ends_word = chars.peek().is_none_or(|next| next.is_whitespace());
+                    if matches!(c, ':' | '?' | '!') && ends_word {
                         sentence_start = true;
                     }
                 }
@@ -1063,6 +1066,14 @@ mod tests {
             ),
             ("Walking in {London} Today", "Walking in London today"),
             ("A Study of I and You", "A study of i and you"),
+            (
+                "Ratio a:b and http://x.org: The End",
+                "Ratio a:b and http://x.org: The end",
+            ),
+            (
+                "Tags <mml:Mi>A</mml:Mi> Here",
+                "Tags <mml:mi>a</mml:mi> here",
+            ),
         ];
         for (title, expected) in cases {
             let entry = item(&format!("@book{{k, title={{{title}}}}}"));
