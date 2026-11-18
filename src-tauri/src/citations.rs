@@ -403,8 +403,26 @@ pub fn render_document(
     let loaded = references::load_references(document_path, front_matter, allow_network);
     let mut out = render(&loaded.references, &style, &locale, citations);
     out.title = header_string(front_matter, "reference-section-title");
+    if header_truish(front_matter, "suppress-bibliography") {
+        out.bibliography.clear();
+    }
     out.warnings.splice(0..0, loaded.warnings);
     Ok(out)
+}
+
+/// Whether the header sets `key` to true as pandoc reads it: the boolean
+/// `true`, or the text "t", "true" or "yes" in any case.
+fn header_truish(front_matter: &str, key: &str) -> bool {
+    let Ok(document) = yaml_serde::from_str::<yaml_serde::Value>(front_matter) else {
+        return false;
+    };
+    match document.get(key) {
+        Some(yaml_serde::Value::Bool(value)) => *value,
+        Some(yaml_serde::Value::String(text)) => {
+            ["t", "true", "yes"].contains(&text.trim().to_ascii_lowercase().as_str())
+        }
+        _ => false,
+    }
 }
 
 #[cfg(test)]
@@ -620,6 +638,23 @@ mod tests {
         assert!(sent.in_text && sent.items[0].key == "a");
         let err = render_document(None, "csl: nope\n", false, &cited).unwrap_err();
         assert!(err.starts_with("unknown citation style"));
+    }
+
+    #[test]
+    fn suppress_bibliography_keeps_the_citations_and_drops_the_list() {
+        let cited = [cite(&["ERA5LandHourlyData2019"])];
+        for (setting, suppressed) in [
+            ("true", true),
+            ("\"Yes\"", true),
+            ("t", true),
+            ("false", false),
+            ("no", false),
+        ] {
+            let header = format!("suppress-bibliography: {setting}\n{ISSUE_EXAMPLE}");
+            let out = render_document(None, &header, false, &cited).unwrap();
+            assert!(out.citations[0].is_some(), "{setting}");
+            assert_eq!(out.bibliography.is_empty(), suppressed, "{setting}");
+        }
     }
 
     /// The header of a fixture document, between its `---` lines.
