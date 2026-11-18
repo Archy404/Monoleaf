@@ -153,15 +153,26 @@ export function refsClasses(line: string): string[] {
   return [...attributes.matchAll(/(?:^|\s)\.([\w-]+)/g)].map((m) => m[1]);
 }
 
-/**
- * Whether the header sets `refsegment` to true, biblatex's name for lists
- * per segment: the boolean, or "t", "true" or "yes" in any case, as pandoc
- * reads a flag. Pandoc itself does not know the key and ignores it.
+/** Whether the header sets `key` to true: the boolean, or "t", "true" or
+ * "yes" in any case, quoted or not, as pandoc reads a flag; a missing key is
+ * false. `key` is a literal header key.
  */
-export function refsegmentOn(header: string): boolean {
-  const value = /^refsegment:[ \t]*(.*?)[ \t]*$/m.exec(header)?.[1] ?? "";
+function flagOn(header: string, key: string): boolean {
+  const re = new RegExp(`^${key}:[ \\t]*(.*?)[ \\t]*$`, "m");
+  const value = re.exec(header)?.[1] ?? "";
   const text = value.replace(/^(["'])(.*)\1$/, "$2").toLowerCase();
   return ["t", "true", "yes"].includes(text);
+}
+
+/** Whether the header sets `refsegment`, biblatex's name for lists per
+ * segment. Pandoc itself does not know the key and ignores it. */
+export function refsegmentOn(header: string): boolean {
+  return flagOn(header, "refsegment");
+}
+
+/** Whether the header sets `suppress-bibliography`: no reference list. */
+export function suppressBibliographyOn(header: string): boolean {
+  return flagOn(header, "suppress-bibliography");
 }
 
 /** A refs block or a citation, in document order; a footnote's citations
