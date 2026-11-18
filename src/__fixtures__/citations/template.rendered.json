@@ -1,0 +1,36 @@
+{
+  "citations": [
+    "(Ipsum and Dolor 2020)",
+    "(Amet 2019, 3)",
+    "(see Tempor 2018, chap. 2, emphasis added)",
+    "(Ipsum and Dolor 2020; Amet 2019)",
+    "Magna (2021)",
+    "(2018, 7)",
+    "(Amet 2019)"
+  ],
+  "bibliography": [
+    {
+      "key": "amet2019",
+      "label": null,
+      "html": "Amet, Consectetur. 2019. <span style=\"font-style: italic;\">The Book of Elit</span>. Example Press."
+    },
+    {
+      "key": "ipsum2020",
+      "label": null,
+      "html": "Ipsum, Lorem, and Sit Dolor. 2020. “Consectetur Adipiscing: A Study of Placeholder Text.” <span style=\"font-style: italic;\">Journal of Examples</span> 3 (2): 1–9. <a href=\"https://doi.org/10.1000/example.2020.3\">https://doi.org/10.1000/example.2020.3</a>."
+    },
+    {
+      "key": "magna2021",
+      "label": null,
+      "html": "Magna, Aliqua. 2021. “Ut Enim Ad Minim Veniam.” Example Site,. <a href=\"https://example.org/ut-enim\">https://example.org/ut-enim</a>."
+    },
+    {
+      "key": "tempor2018",
+      "label": null,
+      "html": "Tempor, Incididunt. 2018. “Labore Et Dolore at Scale.” PhD thesis, Example University."
+    }
+  ],
+  "hangingIndent": true,
+  "title": null,
+  "warnings": []
+}

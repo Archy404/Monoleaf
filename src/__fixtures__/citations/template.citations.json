@@ -1,0 +1,99 @@
+[
+  {
+    "from": 0,
+    "to": 12,
+    "items": [
+      {
+        "key": "ipsum2020",
+        "prefix": "",
+        "suffix": "",
+        "suppressAuthor": false
+      }
+    ],
+    "inText": false
+  },
+  {
+    "from": 0,
+    "to": 17,
+    "items": [
+      {
+        "key": "amet2019",
+        "prefix": "",
+        "suffix": "p. 3",
+        "suppressAuthor": false
+      }
+    ],
+    "inText": false
+  },
+  {
+    "from": 0,
+    "to": 42,
+    "items": [
+      {
+        "key": "tempor2018",
+        "prefix": "see",
+        "suffix": "chap. 2, emphasis added",
+        "suppressAuthor": false
+      }
+    ],
+    "inText": false
+  },
+  {
+    "from": 0,
+    "to": 23,
+    "items": [
+      {
+        "key": "ipsum2020",
+        "prefix": "",
+        "suffix": "",
+        "suppressAuthor": false
+      },
+      {
+        "key": "amet2019",
+        "prefix": "",
+        "suffix": "",
+        "suppressAuthor": false
+      }
+    ],
+    "inText": false
+  },
+  {
+    "from": 0,
+    "to": 10,
+    "items": [
+      {
+        "key": "magna2021",
+        "prefix": "",
+        "suffix": "",
+        "suppressAuthor": false
+      }
+    ],
+    "inText": true
+  },
+  {
+    "from": 0,
+    "to": 20,
+    "items": [
+      {
+        "key": "tempor2018",
+        "prefix": "",
+        "suffix": "p. 7",
+        "suppressAuthor": true
+      }
+    ],
+    "inText": false
+  },
+  {
+    "from": 0,
+    "to": 11,
+    "items": [
+      {
+        "key": "amet2019",
+        "prefix": "",
+        "suffix": "",
+        "suppressAuthor": false
+      }
+    ],
+    "inText": false
+  }
+]
