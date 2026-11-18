@@ -93,13 +93,14 @@ describe("the references dialog", () => {
     }
     const text = templateText("\n");
     for (const form of [
-      "[@ipsum2020]",
-      ", p. 3]",
-      "[see @tempor2018, chap. 2, emphasis added]",
-      "[@ipsum2020; @amet2019]",
-      "@magna2021 says",
-      "[-@tempor2018, p. 7]",
-      "[^note]: A footnote cites too [@amet2019].",
+      "[@doe2020]",
+      "[@smith2019, p. 3]",
+      "[see @kim2018, chap. 2, for the method]",
+      "[@doe2020; @smith2019]",
+      "as @lee2021 shows",
+      "@smith2019 [p. 7]",
+      "Kim [-@kim2018]",
+      "[^how]: A citation in a footnote",
       "::: {#refs}",
     ]) {
       expect(text).toContain(form);

@@ -21,14 +21,14 @@ export interface CitationSetup {
   sectionTitle: string;
   suppressBibliography: boolean;
   refsegment: boolean;
-  /** Insert the template text, and the example file beside a saved document. */
+  /** Insert the how-to text, and the example file beside a saved document. */
   template: boolean;
 }
 
 /** pandoc's default style, the dialog's too. */
 export const DEFAULT_STYLE = "chicago-author-date";
 
-/** The example file the template cites; written beside the document. */
+/** The example file the how-to cites; written beside the document. */
 export const EXAMPLE_FILE = "example.bib";
 
 export const DEFAULT_SETUP: CitationSetup = {
@@ -42,11 +42,11 @@ export const DEFAULT_SETUP: CitationSetup = {
   template: false,
 };
 
-/** The four works the template cites: an article, a book, a thesis, a web
+/** The four works the how-to cites: an article, a book, a thesis, a web
  * page, written as a .bib file. */
-export const EXAMPLE_BIB = `@article{ipsum2020,
-  author  = {Ipsum, Lorem and Dolor, Sit},
-  title   = {Consectetur Adipiscing: A Study of Placeholder Text},
+export const EXAMPLE_BIB = `@article{doe2020,
+  author  = {Doe, Jane and Roe, Richard},
+  title   = {How to Cite in a Markdown Document},
   journal = {Journal of Examples},
   year    = {2020},
   volume  = {3},
@@ -54,99 +54,113 @@ export const EXAMPLE_BIB = `@article{ipsum2020,
   pages   = {1--9},
   doi     = {10.1000/example.2020.3},
 }
-@book{amet2019,
-  author    = {Amet, Consectetur},
-  title     = {The Book of Elit},
+@book{smith2019,
+  author    = {Smith, John},
+  title     = {The Reference List},
   publisher = {Example Press},
   address   = {Berlin},
   year      = {2019},
 }
-@phdthesis{tempor2018,
-  author = {Tempor, Incididunt},
-  title  = {Labore et Dolore at Scale},
+@phdthesis{kim2018,
+  author = {Kim, Min-jun},
+  title  = {Citation Styles Compared},
   school = {Example University},
   year   = {2018},
 }
-@online{magna2021,
-  author       = {Magna, Aliqua},
-  title        = {Ut Enim ad Minim Veniam},
+@online{lee2021,
+  author       = {Lee, Ana},
+  title        = {Citing a Web Page},
   organization = {{Example Site}},
   year         = {2021},
-  url          = {https://example.org/ut-enim},
+  url          = {https://example.org/citing},
 }
 `;
 
 /** The same four works as the lines of an inline `references:` list. */
 export const EXAMPLE_REFERENCES: readonly string[] = [
-  "- id: ipsum2020",
+  "- id: doe2020",
   "  type: article-journal",
-  "  title: 'Consectetur adipiscing: A study of placeholder text'",
+  "  title: How to cite in a Markdown document",
   "  author:",
-  "  - family: Ipsum",
-  "    given: Lorem",
-  "  - family: Dolor",
-  "    given: Sit",
+  "  - family: Doe",
+  "    given: Jane",
+  "  - family: Roe",
+  "    given: Richard",
   "  container-title: Journal of Examples",
   "  volume: 3",
   "  issue: 2",
   "  page: 1-9",
   "  issued: 2020",
   "  DOI: 10.1000/example.2020.3",
-  "- id: amet2019",
+  "- id: smith2019",
   "  type: book",
-  "  title: The book of elit",
+  "  title: The reference list",
   "  author:",
-  "  - family: Amet",
-  "    given: Consectetur",
+  "  - family: Smith",
+  "    given: John",
   "  publisher: Example Press",
   "  publisher-place: Berlin",
   "  issued: 2019",
-  "- id: tempor2018",
+  "- id: kim2018",
   "  type: thesis",
-  "  title: Labore et dolore at scale",
+  "  title: Citation styles compared",
   "  genre: PhD thesis",
   "  author:",
-  "  - family: Tempor",
-  "    given: Incididunt",
+  "  - family: Kim",
+  "    given: Min-jun",
   "  publisher: Example University",
   "  issued: 2018",
-  "- id: magna2021",
+  "- id: lee2021",
   "  type: webpage",
-  "  title: Ut enim ad minim veniam",
+  "  title: Citing a web page",
   "  author:",
-  "  - family: Magna",
-  "    given: Aliqua",
+  "  - family: Lee",
+  "    given: Ana",
   "  publisher: Example Site",
   "  issued: 2021",
-  "  URL: https://example.org/ut-enim",
+  "  URL: https://example.org/citing",
 ];
 
 /** The keys the example works have, in file order. */
-export const EXAMPLE_KEYS = [
-  "ipsum2020",
-  "amet2019",
-  "tempor2018",
-  "magna2021",
-];
+export const EXAMPLE_KEYS = ["doe2020", "smith2019", "kim2018", "lee2021"];
 
 /**
- * The template: a text that uses every form the parser reads, a footnote
- * that cites, and the block where the list goes. `nl` is the document's
- * line break.
+ * The how-to: every form the parser reads, each shown in the sentence that
+ * explains it, a footnote that cites, and the block where the list goes.
+ * `nl` is the document's line break.
  */
 export function templateText(nl: string): string {
   return [
-    "# Lorem ipsum",
+    "# How to cite",
     "",
-    "Lorem ipsum dolor sit amet [@ipsum2020], consectetur adipiscing elit " +
-      "[@amet2019, p. 3]. Sed do eiusmod tempor incididunt " +
-      "[see @tempor2018, chap. 2, emphasis added] ut labore et dolore magna " +
-      "aliqua [@ipsum2020; @amet2019].",
+    "The references button wrote this text and the file `example.bib` beside " +
+      "this document; the header above names the citation style and that file. " +
+      "Delete the text once you have seen what it shows.",
     "",
-    "@magna2021 says ut enim ad minim veniam, and Tempor [-@tempor2018, p. 7] " +
-      "agrees. Quis nostrud exercitation ullamco laboris[^note] nisi ut aliquip.",
+    "A key in brackets cites a work, and the style decides how it prints " +
+      "[@doe2020]. A page number follows the key after a comma [@smith2019, " +
+      "p. 3], and the other locators work the same way, such as a chapter " +
+      "[@smith2019, chap. 2] or a figure [@doe2020, fig. 1]. Words before the " +
+      "key are a prefix and words after the locator a suffix, both printed " +
+      "with the citation [see @kim2018, chap. 2, for the method]. Several " +
+      "works cite together when semicolons separate them [@doe2020; " +
+      "@smith2019].",
     "",
-    "[^note]: A footnote cites too [@amet2019].",
+    "A key written without brackets makes the author part of the sentence, " +
+      "as @lee2021 shows, and a bracket right after it holds the locator, as " +
+      "@smith2019 [p. 7] shows. A minus sign before the key leaves the author " +
+      "out when the sentence names them already: Kim [-@kim2018] compared the " +
+      "styles. A footnote can cite as well.[^how]",
+    "",
+    "[^how]: A citation in a footnote is numbered where the footnote's mark " +
+      "stands [@doe2020].",
+    "",
+    "In the live view a citation shows as the style prints it; put the cursor " +
+      "on its line to see and edit the source. Type `@` to pick a key from the " +
+      "list of references, and rest the pointer on a key to see its entry. The " +
+      "reference list stands where the refs block below is; without a block it " +
+      "goes to the end of the document, under the heading the header's " +
+      "`reference-section-title` gives it.",
     "",
     "## References",
     "",

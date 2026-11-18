@@ -1,10 +1,10 @@
 [
   {
     "from": 0,
-    "to": 12,
+    "to": 10,
     "items": [
       {
-        "key": "ipsum2020",
+        "key": "doe2020",
         "prefix": "",
         "suffix": "",
         "suppressAuthor": false
@@ -14,10 +14,10 @@
   },
   {
     "from": 0,
-    "to": 17,
+    "to": 18,
     "items": [
       {
-        "key": "amet2019",
+        "key": "smith2019",
         "prefix": "",
         "suffix": "p. 3",
         "suppressAuthor": false
@@ -27,12 +27,12 @@
   },
   {
     "from": 0,
-    "to": 42,
+    "to": 21,
     "items": [
       {
-        "key": "tempor2018",
-        "prefix": "see",
-        "suffix": "chap. 2, emphasis added",
+        "key": "smith2019",
+        "prefix": "",
+        "suffix": "chap. 2",
         "suppressAuthor": false
       }
     ],
@@ -40,16 +40,42 @@
   },
   {
     "from": 0,
-    "to": 23,
+    "to": 18,
     "items": [
       {
-        "key": "ipsum2020",
+        "key": "doe2020",
+        "prefix": "",
+        "suffix": "fig. 1",
+        "suppressAuthor": false
+      }
+    ],
+    "inText": false
+  },
+  {
+    "from": 0,
+    "to": 39,
+    "items": [
+      {
+        "key": "kim2018",
+        "prefix": "see",
+        "suffix": "chap. 2, for the method",
+        "suppressAuthor": false
+      }
+    ],
+    "inText": false
+  },
+  {
+    "from": 0,
+    "to": 22,
+    "items": [
+      {
+        "key": "doe2020",
         "prefix": "",
         "suffix": "",
         "suppressAuthor": false
       },
       {
-        "key": "amet2019",
+        "key": "smith2019",
         "prefix": "",
         "suffix": "",
         "suppressAuthor": false
@@ -59,10 +85,10 @@
   },
   {
     "from": 0,
-    "to": 10,
+    "to": 8,
     "items": [
       {
-        "key": "magna2021",
+        "key": "lee2021",
         "prefix": "",
         "suffix": "",
         "suppressAuthor": false
@@ -72,12 +98,25 @@
   },
   {
     "from": 0,
-    "to": 20,
+    "to": 17,
     "items": [
       {
-        "key": "tempor2018",
+        "key": "smith2019",
         "prefix": "",
         "suffix": "p. 7",
+        "suppressAuthor": false
+      }
+    ],
+    "inText": true
+  },
+  {
+    "from": 0,
+    "to": 11,
+    "items": [
+      {
+        "key": "kim2018",
+        "prefix": "",
+        "suffix": "",
         "suppressAuthor": true
       }
     ],
@@ -85,10 +124,10 @@
   },
   {
     "from": 0,
-    "to": 11,
+    "to": 10,
     "items": [
       {
-        "key": "amet2019",
+        "key": "doe2020",
         "prefix": "",
         "suffix": "",
         "suppressAuthor": false

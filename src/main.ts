@@ -1326,6 +1326,13 @@ async function openReferencesDialog() {
   refsFields.suppress.checked = setup.suppressBibliography;
   refsFields.segment.checked = setup.refsegment;
   refsFields.template.checked = false;
+  // A document that already names references has its own text; the how-to
+  // and the example file are for one that starts from nothing.
+  const hasFiles = setup.bibliography !== "" || hasReferences;
+  refsFields.template.disabled = hasFiles;
+  refsFields.template.title = hasFiles
+    ? "The header already names references."
+    : "";
   referencesDialog.returnValue = "cancel";
   referencesDialog.addEventListener(
     "close",
@@ -1340,7 +1347,7 @@ async function openReferencesDialog() {
         sectionTitle: refsFields.title.value,
         suppressBibliography: refsFields.suppress.checked,
         refsegment: refsFields.segment.checked,
-        template: refsFields.template.checked,
+        template: refsFields.template.checked && !refsFields.template.disabled,
       });
     },
     { once: true },
