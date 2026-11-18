@@ -404,6 +404,10 @@ html.theme-dark .brand-dark {
   min-width: 2.5em;
   text-indent: 0;
 }
+.cm-refs-suppressed {
+  font-style: italic;
+  opacity: 0.6;
+}
 
 /* Rendered math (KaTeX) in the live view */
 .cm-math {

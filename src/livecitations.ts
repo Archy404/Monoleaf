@@ -31,6 +31,7 @@ import {
   REFS_OPEN_RE,
   refsegmentOn,
   segmentLists,
+  suppressBibliographyOn,
   type ParsedCitation,
   type SegmentEvent,
   namesReferences,
@@ -166,6 +167,23 @@ class ReferenceListWidget extends WidgetType {
       block.append(row);
     }
     return block;
+  }
+  ignoreEvent() {
+    return false;
+  }
+}
+
+/* A refs block whose list the header suppresses: one muted line, so the
+   block stays visible and a click still reaches its source. */
+class SuppressedListWidget extends WidgetType {
+  eq() {
+    return true;
+  }
+  toDOM() {
+    const note = document.createElement("div");
+    note.className = "cm-refs cm-refs-suppressed";
+    note.textContent = "Reference list suppressed (suppress-bibliography)";
+    return note;
   }
   ignoreEvent() {
     return false;
@@ -373,6 +391,8 @@ const referenceList = StateField.define<{
   blocks: RefsBlock[];
   /** What each block lists, recomputed when the text changes. */
   keys: (ReadonlySet<string> | null)[];
+  /** The header suppresses the list; recomputed when the text changes. */
+  suppressed: boolean;
   decorations: DecorationSet;
 }>({
   create: (state) => {
@@ -381,20 +401,32 @@ const referenceList = StateField.define<{
       list: null,
       blocks,
       keys: blockLists(state, blocks),
+      suppressed: listSuppressed(state),
       decorations: Decoration.none,
     };
   },
   update(value, tr) {
-    let { list, blocks, keys } = value;
+    let { list, blocks, keys, suppressed } = value;
     for (const effect of tr.effects) {
       if (effect.is(rendered)) list = effect.value.result;
     }
     if (tr.docChanged) {
       blocks = findRefsBlocks(tr.state);
       keys = blockLists(tr.state, blocks);
+      suppressed = listSuppressed(tr.state);
     }
     let decorations = Decoration.none;
-    if (list !== null && list.bibliography.length > 0) {
+    if (suppressed) {
+      const ranges = blocks
+        .filter((block) => !cursorOnLine(tr.state, block.from, block.to))
+        .map((block) =>
+          Decoration.replace({
+            widget: new SuppressedListWidget(),
+            block: true,
+          }).range(block.from, block.to),
+        );
+      decorations = Decoration.set(ranges);
+    } else if (list !== null && list.bibliography.length > 0) {
       const ranges = blocks.flatMap((block, n) => {
         if (cursorOnLine(tr.state, block.from, block.to)) return [];
         const own = keys[n] ?? null;
@@ -416,13 +448,23 @@ const referenceList = StateField.define<{
       });
       decorations = Decoration.set(ranges);
     }
-    return { list, blocks, keys, decorations };
+    return { list, blocks, keys, suppressed, decorations };
   },
   provide: (field) => [
     EditorView.decorations.from(field, (value) => value.decorations),
     EditorView.atomicRanges.of((view) => view.state.field(field).decorations),
   ],
 });
+
+/** Whether the document's header suppresses the reference list. */
+function listSuppressed(state: EditorState): boolean {
+  const top = state.doc.sliceString(0, HEADER_SCAN_CHARS);
+  return suppressBibliographyOn(frontMatter(top));
+}
+
+/* 64 KiB of text, the same span blockLists() and collect() read for the
+   header. */
+const HEADER_SCAN_CHARS = 1 << 16;
 
 /** Where a citation stands in reading order: a footnote's citation at the
  * footnote's first mark, any other where it is written. */

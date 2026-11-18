@@ -247,6 +247,27 @@ describe("live citations", () => {
     expect(shown).toEqual(["[1]", "[3]", "[2]"]);
   });
 
+  it("shows a note at every refs block when the header suppresses the list", async () => {
+    const doc =
+      "---\nbibliography: r.bib\nsuppress-bibliography: true\n---\n\n" +
+      "See [@doe2020].\n\n::: {#refs}\n:::\n\n::: {#refs}\nWorks cited:\n:::\n\nEnd.\n";
+    const view = open(doc, stub().render);
+    view.dispatch({ selection: { anchor: doc.length } });
+    await settle();
+    const notes = view.contentDOM.querySelectorAll(".cm-refs-suppressed");
+    expect(notes).toHaveLength(2);
+    expect(view.contentDOM.querySelector(".cm-refs-entry")).toBeNull();
+    // A block that holds text keeps its opening fence and text, as with a list.
+    const text = view.contentDOM.textContent ?? "";
+    expect(text.split("{#refs}")).toHaveLength(2);
+    expect(text).toContain("Works cited:");
+    view.dispatch({ selection: { anchor: doc.indexOf("#refs") } });
+    expect(
+      view.contentDOM.querySelectorAll(".cm-refs-suppressed"),
+    ).toHaveLength(1);
+    expect(view.contentDOM.textContent).toContain("::: {#refs}");
+  });
+
   it("leaves a refs block alone without a list, in code and unclosed", async () => {
     const view = open(
       REFS + "No citations.\n\n::: {#refs}\n:::\n",
