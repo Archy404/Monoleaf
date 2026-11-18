@@ -1143,14 +1143,28 @@
           >Reference section title (reference-section-title)</label
         >
         <input id="refs-title" type="text" spellcheck="false" />
-        <label class="check-row"
-          ><input id="refs-suppress" type="checkbox" /> No reference list
-          (suppress-bibliography)</label
-        >
-        <label class="check-row"
-          ><input id="refs-segment" type="checkbox" /> A list per chapter at
-          each refs block (refsegment)</label
-        >
+        <fieldset>
+          <legend>Reference list (suppress-bibliography)</legend>
+          <label class="check-row"
+            ><input type="radio" name="refs-suppress" value="false" /> Show the
+            reference list</label
+          >
+          <label class="check-row"
+            ><input type="radio" name="refs-suppress" value="true" /> No
+            reference list</label
+          >
+        </fieldset>
+        <fieldset>
+          <legend>Lists per chapter (refsegment)</legend>
+          <label class="check-row"
+            ><input type="radio" name="refs-segment" value="false" /> Every refs
+            block lists all works</label
+          >
+          <label class="check-row"
+            ><input type="radio" name="refs-segment" value="true" /> A list per
+            chapter at each refs block</label
+          >
+        </fieldset>
         <label class="check-row"
           ><input id="refs-template" type="checkbox" /> Generate with citation
           template: an example text, a refs block and example.bib beside the

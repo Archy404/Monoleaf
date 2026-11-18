@@ -1262,8 +1262,13 @@ const refsFields = {
   files: document.getElementById("refs-files") as HTMLInputElement,
   inline: document.getElementById("refs-inline") as HTMLInputElement,
   title: document.getElementById("refs-title") as HTMLInputElement,
-  suppress: document.getElementById("refs-suppress") as HTMLInputElement,
-  segment: document.getElementById("refs-segment") as HTMLInputElement,
+  // Radio groups: their value is the checked option's, "true" or "false".
+  suppress: referencesDialog
+    .querySelector("form")!
+    .elements.namedItem("refs-suppress") as RadioNodeList,
+  segment: referencesDialog
+    .querySelector("form")!
+    .elements.namedItem("refs-segment") as RadioNodeList,
   template: document.getElementById("refs-template") as HTMLInputElement,
 };
 // The styles most writers want, at the top of the select; the rest follow.
@@ -1323,8 +1328,8 @@ async function openReferencesDialog() {
     ? "The header already holds a references list."
     : "";
   refsFields.title.value = setup.sectionTitle;
-  refsFields.suppress.checked = setup.suppressBibliography;
-  refsFields.segment.checked = setup.refsegment;
+  refsFields.suppress.value = String(setup.suppressBibliography);
+  refsFields.segment.value = String(setup.refsegment);
   refsFields.template.checked = false;
   // A document that already names references has its own text; the how-to
   // and the example file are for one that starts from nothing.
@@ -1345,8 +1350,8 @@ async function openReferencesDialog() {
         inlineReferences:
           refsFields.inline.checked && !refsFields.inline.disabled,
         sectionTitle: refsFields.title.value,
-        suppressBibliography: refsFields.suppress.checked,
-        refsegment: refsFields.segment.checked,
+        suppressBibliography: refsFields.suppress.value === "true",
+        refsegment: refsFields.segment.value === "true",
         template: refsFields.template.checked && !refsFields.template.disabled,
       });
     },
