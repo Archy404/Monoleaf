@@ -1,13 +1,13 @@
 {
   "citations": [
-    "(Doe & Roe, 2020)",
+    "(Doe &amp; Roe, 2020)",
     "(Smith, 2019)"
   ],
   "bibliography": [
     {
       "key": "doe2020",
       "label": null,
-      "html": "Doe, J., & Roe, R. (2020). A study of reference lists. <span style=\"font-style: italic;\">Journal of Studies</span>, <span style=\"font-style: italic;\">3</span>(2), 1–9. <a href=\"https://doi.org/10.1000/jos.2020.3\">https://doi.org/10.1000/jos.2020.3</a>"
+      "html": "Doe, J., &amp; Roe, R. (2020). A study of reference lists. <span style=\"font-style: italic;\">Journal of Studies</span>, <span style=\"font-style: italic;\">3</span>(2), 1–9. <a href=\"https://doi.org/10.1000/jos.2020.3\">https://doi.org/10.1000/jos.2020.3</a>"
     },
     {
       "key": "smith2019",

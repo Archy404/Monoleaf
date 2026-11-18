@@ -12,7 +12,7 @@ use hayagriva::citationberg::{
 };
 use hayagriva::{
     BibliographyDriver, BibliographyRequest, BufWriteFormat, CitationItem, CitationRequest,
-    CitePurpose, ElemChild, ElemChildren, LocatorPayload, SpecificLocator,
+    CitePurpose, Elem, ElemChild, ElemChildren, Formatted, LocatorPayload, SpecificLocator,
 };
 use std::collections::HashMap;
 
@@ -232,12 +232,12 @@ fn decorate(
     let prefix = first.prefix.trim();
     if !prefix.is_empty() {
         let at = opening(&html, style).map_or(0, str::len);
-        html.insert_str(at, &format!("{prefix} "));
+        html.insert_str(at, &format!("{} ", escape_html(prefix)));
     }
     let suffix = suffix.trim();
     if !suffix.is_empty() {
         let at = html.len() - closing(&html, style).map_or(0, str::len);
-        html.insert_str(at, &format!(", {suffix}"));
+        html.insert_str(at, &format!(", {}", escape_html(suffix)));
     }
     html
 }
@@ -272,13 +272,55 @@ pub struct BibliographyEntry {
 
 fn html(children: &ElemChildren) -> String {
     let mut out = String::new();
-    let _ = children.write_buf(&mut out, BufWriteFormat::Html);
+    let _ = escaped(children).write_buf(&mut out, BufWriteFormat::Html);
     out
 }
 
 fn html_of(child: &ElemChild) -> String {
     let mut out = String::new();
-    let _ = child.write_buf(&mut out, BufWriteFormat::Html);
+    let _ = escaped_child(child).write_buf(&mut out, BufWriteFormat::Html);
+    out
+}
+
+/// hayagriva writes a reference's text into the HTML as it is, so a "<" in a
+/// title would open a tag. A copy with every text and URL escaped; the tags
+/// hayagriva writes for its own formatting stay.
+fn escaped(children: &ElemChildren) -> ElemChildren {
+    ElemChildren(children.0.iter().map(escaped_child).collect())
+}
+
+fn escaped_child(child: &ElemChild) -> ElemChild {
+    let formatted = |f: &Formatted| Formatted {
+        text: escape_html(&f.text),
+        formatting: f.formatting,
+    };
+    match child {
+        ElemChild::Text(text) => ElemChild::Text(formatted(text)),
+        ElemChild::Elem(elem) => ElemChild::Elem(Elem {
+            children: escaped(&elem.children),
+            display: elem.display,
+            meta: elem.meta.clone(),
+        }),
+        ElemChild::Link { text, url } => ElemChild::Link {
+            text: formatted(text),
+            url: escape_html(url),
+        },
+        other => other.clone(),
+    }
+}
+
+/// The four characters HTML gives a meaning, in text and in an attribute.
+fn escape_html(text: &str) -> String {
+    let mut out = String::with_capacity(text.len());
+    for c in text.chars() {
+        match c {
+            '&' => out.push_str("&amp;"),
+            '<' => out.push_str("&lt;"),
+            '>' => out.push_str("&gt;"),
+            '"' => out.push_str("&quot;"),
+            _ => out.push(c),
+        }
+    }
     out
 }
 
@@ -556,9 +598,9 @@ mod tests {
         assert_eq!(
             texts[..3],
             [
-                "(see Doe & Roe, 2020, Chapter 2, emphasis added)",
+                "(see Doe &amp; Roe, 2020, Chapter 2, emphasis added)",
                 "(2020, p. 3)",
-                "(Doe & Roe, 2020, p. 12)"
+                "(Doe &amp; Roe, 2020, p. 12)"
             ]
         );
         assert_eq!(apa.warnings.len(), 2, "{:?}", apa.warnings);
@@ -608,11 +650,11 @@ mod tests {
         assert_eq!(
             texts,
             [
-                "(Doe & Roe, 2020, S. 3\u{2013}5, emphasis added)",
-                "(Doe & Roe, 2020, Kapitel 2)",
-                "(Doe & Roe, 2020, S. 7)",
-                "(Doe & Roe, 2020, S. 9, see)",
-                "(Doe & Roe, 2020, nothing numeric)"
+                "(Doe &amp; Roe, 2020, S. 3\u{2013}5, emphasis added)",
+                "(Doe &amp; Roe, 2020, Kapitel 2)",
+                "(Doe &amp; Roe, 2020, S. 7)",
+                "(Doe &amp; Roe, 2020, S. 9, see)",
+                "(Doe &amp; Roe, 2020, nothing numeric)"
             ]
         );
     }
@@ -694,5 +736,31 @@ mod tests {
             seen += 1;
         }
         assert!(seen > 0, "no fixture documents in {}", dir.display());
+    }
+
+    #[test]
+    fn markup_in_a_reference_prints_as_text() {
+        let bib = "@article{odd, author={Doe, Jane}, title={A <b>bold</b> & co}, \
+                   journal={J}, year={2020}, doi={10.1/a\"b}}";
+        let references = read_biblatex(bib, true).references;
+        let style = style_named(Some("apa")).unwrap();
+        let mut cited = cite(&["odd"]);
+        cited.items[0].prefix = "<i>see</i>".into();
+        cited.items[0].suffix = "p. 3, <u>really</u>".into();
+        let out = render(&references, &style, &LocaleCode::en_us(), &[cited]);
+        assert_eq!(
+            out.citations[0].as_deref(),
+            Some("(&lt;i&gt;see&lt;/i&gt; Doe, 2020, p. 3, &lt;u&gt;really&lt;/u&gt;)")
+        );
+        let html = &out.bibliography[0].html;
+        assert!(
+            html.contains("A &lt;b&gt;bold&lt;/b&gt; &amp; co"),
+            "{html}"
+        );
+        assert!(
+            html.contains("href=\"https://doi.org/10.1/a&quot;b\""),
+            "{html}"
+        );
+        assert!(!html.contains("<b>"), "{html}");
     }
 }
