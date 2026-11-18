@@ -127,9 +127,8 @@ describe("live citations", () => {
     await settle();
     const list = view.contentDOM.querySelector(".cm-refs");
     expect(list?.className).toBe("cm-refs cm-refs-hanging");
-    expect(list?.querySelector(".cm-refs-title")?.textContent).toBe(
-      "References",
-    );
+    // The header's title belongs to the list without a block, as in pandoc.
+    expect(view.contentDOM.textContent).not.toContain("References");
     expect(list?.querySelector(".cm-refs-entry")?.innerHTML).toBe(
       '<span class="cm-refs-label">[1]</span><span>Doe, J. <i>A Study</i>.</span>',
     );
@@ -139,12 +138,27 @@ describe("live citations", () => {
     expect(view.contentDOM.textContent).toContain("::: {#refs}");
   });
 
-  it("leaves a refs block alone without a list and when it holds text", async () => {
+  it("shows the list at every block, after what a block holds", async () => {
+    const doc =
+      "[@doe2020]\n\n::: {#refs}\n:::\n\n::: {#refs}\nWorks cited:\n:::\n\nEnd.\n";
+    const view = open(doc, stub().render);
+    view.dispatch({ selection: { anchor: doc.length } });
+    await settle();
+    expect(view.contentDOM.querySelectorAll(".cm-refs")).toHaveLength(2);
+    expect(view.contentDOM.textContent).toContain("Works cited:");
+    // The cursor on the second block's closing fence reveals only that one.
+    view.dispatch({ selection: { anchor: doc.lastIndexOf(":::") } });
+    expect(view.contentDOM.querySelectorAll(".cm-refs")).toHaveLength(1);
+  });
+
+  it("leaves a refs block alone without a list, in code and unclosed", async () => {
     const view = open("No citations.\n\n::: {#refs}\n:::\n", stub().render);
     await settle();
     expect(view.contentDOM.querySelector(".cm-refs")).toBeNull();
-    const view2 = open("[@doe2020]\n\n::: {#refs}\ntext\n:::\n", stub().render);
-    view2.dispatch({ selection: { anchor: 0 } });
+    const code =
+      "[@doe2020]\n\n```\n::: {#refs}\n:::\n```\n\n::: {#refs}\n\nEnd.\n";
+    const view2 = open(code, stub().render);
+    view2.dispatch({ selection: { anchor: code.length } });
     await settle();
     expect(view2.contentDOM.querySelector(".cm-refs")).toBeNull();
   });

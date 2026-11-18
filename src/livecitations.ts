@@ -5,8 +5,9 @@
  * the backend's rendering of the whole document, so numeric styles count in
  * document order; it is kept until the citations or the header change. A
  * key the references do not have stays as typed, marked like a broken link.
- * Citations inside code and in the header are left alone. A `::: {#refs}`
- * block shows the reference list the same way, as a block widget.
+ * Citations inside code and in the header are left alone. Every
+ * `::: {#refs}` block shows the reference list the same way, as a block
+ * widget, after what the block holds, as the export places it.
  */
 import { invoke } from "@tauri-apps/api/core";
 import {
@@ -24,7 +25,12 @@ import {
   ViewUpdate,
   WidgetType,
 } from "@codemirror/view";
-import { findCitations, type ParsedCitation } from "./citationsyntax";
+import {
+  findCitations,
+  REFS_CLOSE_RE,
+  REFS_OPEN_RE,
+  type ParsedCitation,
+} from "./citationsyntax";
 import type { RenderedCitations } from "./export";
 import { getCurrentDocumentPath } from "./localimages";
 import { frontMatter } from "./meta";
@@ -84,27 +90,33 @@ function collect(state: EditorState): Found[] {
   return found;
 }
 
-const REFS_OPEN_RE = /^:::\s*\{#refs\}\s*$/;
-const REFS_CLOSE_RE = /^:::\s*$/;
+/** A `::: {#refs}` block: where the list shows and the lines that reveal
+ * the source when the cursor is on them. An empty block is replaced whole;
+ * a block that holds text keeps it, and its closing fence shows the list. */
+interface RefsBlock {
+  from: number;
+  to: number;
+}
 
-/** The `::: {#refs}` block, opener to closer with only blank lines between,
- * as the export places the list; null without one. */
-function findRefsBlock(
-  state: EditorState,
-): { from: number; to: number } | null {
+/** Every closed refs block outside code, in document order. */
+function findRefsBlocks(state: EditorState): RefsBlock[] {
+  const blocks: RefsBlock[] = [];
   for (let n = 1; n <= state.doc.lines; n++) {
     const line = state.doc.line(n);
     if (!REFS_OPEN_RE.test(line.text)) continue;
+    if (ancestorMatches(state, line.from, CODE_NODE)) continue;
+    let empty = true;
     for (let m = n + 1; m <= state.doc.lines; m++) {
       const next = state.doc.line(m);
-      if (next.text.trim() === "") continue;
-      if (REFS_CLOSE_RE.test(next.text))
-        return { from: line.from, to: next.to };
-      break;
+      if (REFS_CLOSE_RE.test(next.text)) {
+        blocks.push({ from: empty ? line.from : next.from, to: next.to });
+        n = m;
+        break;
+      }
+      if (next.text.trim() !== "") empty = false;
     }
-    return null;
   }
-  return null;
+  return blocks;
 }
 
 class ReferenceListWidget extends WidgetType {
@@ -113,7 +125,6 @@ class ReferenceListWidget extends WidgetType {
   }
   eq(other: ReferenceListWidget) {
     return (
-      other.list.title === this.list.title &&
       other.list.hangingIndent === this.list.hangingIndent &&
       JSON.stringify(other.list.bibliography) ===
         JSON.stringify(this.list.bibliography)
@@ -124,12 +135,6 @@ class ReferenceListWidget extends WidgetType {
     block.className = this.list.hangingIndent
       ? "cm-refs cm-refs-hanging"
       : "cm-refs";
-    if (this.list.title !== null) {
-      const title = document.createElement("div");
-      title.className = "cm-refs-title";
-      title.textContent = this.list.title;
-      block.append(title);
-    }
     for (const entry of this.list.bibliography) {
       const row = document.createElement("div");
       row.className = "cm-refs-entry";
@@ -332,39 +337,40 @@ class LiveCitations {
   }
 }
 
-/** The list at the refs block. A block widget must come from a state field,
- * not a view plugin; the field keeps the last list the backend rendered and
- * replaces the block's lines unless the cursor is on them. */
+/** The list at every refs block. A block widget must come from a state
+ * field, not a view plugin; the field keeps the last list the backend
+ * rendered and replaces each block's lines unless the cursor is on them.
+ * The header's title is not shown: pandoc never puts it into a block. */
 const referenceList = StateField.define<{
   list: RenderedCitations | null;
-  block: { from: number; to: number } | null;
+  blocks: RefsBlock[];
   decorations: DecorationSet;
 }>({
   create: (state) => ({
     list: null,
-    block: findRefsBlock(state),
+    blocks: findRefsBlocks(state),
     decorations: Decoration.none,
   }),
   update(value, tr) {
-    let { list, block } = value;
+    let { list, blocks } = value;
     for (const effect of tr.effects) {
       if (effect.is(rendered)) list = effect.value.result;
     }
-    if (tr.docChanged) block = findRefsBlock(tr.state);
+    if (tr.docChanged) blocks = findRefsBlocks(tr.state);
     let decorations = Decoration.none;
-    if (
-      list !== null &&
-      block !== null &&
-      list.bibliography.length > 0 &&
-      !cursorOnLine(tr.state, block.from, block.to)
-    ) {
-      const deco = Decoration.replace({
-        widget: new ReferenceListWidget(list),
-        block: true,
-      });
-      decorations = Decoration.set([deco.range(block.from, block.to)]);
+    if (list !== null && list.bibliography.length > 0) {
+      const widget = new ReferenceListWidget(list);
+      const ranges = blocks
+        .filter((block) => !cursorOnLine(tr.state, block.from, block.to))
+        .map((block) =>
+          Decoration.replace({ widget, block: true }).range(
+            block.from,
+            block.to,
+          ),
+        );
+      decorations = Decoration.set(ranges);
     }
-    return { list, block, decorations };
+    return { list, blocks, decorations };
   },
   provide: (field) => [
     EditorView.decorations.from(field, (value) => value.decorations),
