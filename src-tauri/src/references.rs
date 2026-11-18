@@ -157,6 +157,9 @@ fn entry_chunks(text: &str) -> Vec<(usize, &str)> {
         .collect()
 }
 
+/// The example bibliography the references dialog writes beside a document.
+pub const EXAMPLE_FILE: &str = "example.bib";
+
 /// How many undefined abbreviations one entry may use before it is skipped.
 const UNDEFINED_ABBREVIATIONS_LIMIT: usize = 16;
 

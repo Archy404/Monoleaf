@@ -38,6 +38,32 @@ pub fn style_named(name: Option<&str>) -> Result<IndependentStyle, String> {
     }
 }
 
+/// What the references dialog offers: every bundled style by its shortest
+/// name, "apa" rather than "american-psychological-association", and every
+/// bundled locale by its code, each list sorted.
+#[derive(Debug, serde::Serialize)]
+pub struct Catalogue {
+    pub styles: Vec<String>,
+    pub locales: Vec<String>,
+}
+
+pub fn catalogue() -> Catalogue {
+    let mut styles: Vec<String> = ArchivedStyle::all()
+        .iter()
+        .filter(|s| matches!(s.get(), Style::Independent(_)))
+        .filter_map(|s| s.names().iter().min_by_key(|n| n.len()))
+        .map(|n| n.to_string())
+        .collect();
+    styles.sort();
+    let mut locales: Vec<String> = bundled_locales()
+        .iter()
+        .filter_map(|l| l.lang.as_ref().map(|code| code.0.clone()))
+        .collect();
+    locales.sort();
+    locales.dedup();
+    Catalogue { styles, locales }
+}
+
 /// The locale from `lang:`; without one the style's own default locale,
 /// as Pandoc does, and English (US) when the style names none either.
 pub fn locale_named(lang: Option<&str>, style: &IndependentStyle) -> LocaleCode {
@@ -792,6 +818,15 @@ mod tests {
             }
         }
         assert_eq!(styles, 80);
+    }
+
+    #[test]
+    fn the_catalogue_lists_every_bundled_style_and_locale() {
+        let found = catalogue();
+        assert_eq!(found.styles.len(), 80);
+        assert!(found.styles.contains(&"apa".to_string()));
+        assert!(found.locales.contains(&"de-DE".to_string()));
+        assert!(found.locales.len() > 40, "{}", found.locales.len());
     }
 
     #[test]
