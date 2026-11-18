@@ -11,8 +11,9 @@ export interface Citation {
   key: string;
 }
 
-// A pandoc key starts with a letter, digit or `_` and goes on with those and
-// internal punctuation; punctuation at the very end belongs to the sentence.
+// A pandoc key starts with a letter, digit or `_`, in any script, and goes on
+// with those and internal punctuation; punctuation at the very end belongs to
+// the sentence.
 /** A header line that names references: a `bibliography:` file or an inline
  * `references:` list, at column 0 as pandoc reads them. */
 const NAMES_REFERENCES = /^(?:bibliography|references)\s*:/m;
@@ -23,8 +24,8 @@ export function namesReferences(header: string): boolean {
   return NAMES_REFERENCES.test(header);
 }
 
-const KEY_START = /[A-Za-z0-9_]/;
-const KEY_CHAR = /[A-Za-z0-9_:.#$%&\-+?<>~/]/;
+const KEY_START = /[\p{L}\p{N}_]/u;
+const KEY_CHAR = /[\p{L}\p{N}_:.#$%&\-+?<>~/]/u;
 
 /**
  * The citation whose key spans `pos`, or null. The key may be empty when the

@@ -73,6 +73,15 @@ describe("findCitations", () => {
     ]);
   });
 
+  it("reads keys in any script, as pandoc does", () => {
+    const text = "Siehe [@пункт3; @Müller2020] und @ürün_1.";
+    expect(findCitations(text).map((c) => c.items.map((i) => i.key))).toEqual([
+      ["пункт3", "Müller2020"],
+      ["ürün_1"],
+    ]);
+    expect(citationAt("@пункт3", 3)).toEqual({ from: 0, to: 7, key: "пункт3" });
+  });
+
   it("leaves e-mail addresses, plain brackets and empty keys alone", () => {
     expect(
       findCitations("write to jane@doe.org [not a citation] or @ me"),
