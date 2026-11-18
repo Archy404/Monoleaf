@@ -301,6 +301,9 @@ class LiveCitations {
     const citations = order.map((i) => this.found[i].citation);
     this.render(header, citations).then(
       (sent) => {
+        // An answer to an older request: a newer one is pending or answered,
+        // and a stale list must not replace the current one.
+        if (key !== this.currentKey) return;
         const back: (string | null)[] = [];
         order.forEach((i, n) => (back[i] = sent.citations[n] ?? null));
         const result = { ...sent, citations: back };

@@ -139,6 +139,34 @@ describe("live citations", () => {
     expect(calls).toHaveLength(2);
   });
 
+  it("drops an answer that arrives after a newer request was made", async () => {
+    type Answer = Awaited<ReturnType<LiveRenderer>>;
+    const pending: ((answer: Answer) => void)[] = [];
+    const render: LiveRenderer = () =>
+      new Promise((resolve) => pending.push(resolve));
+    const doc = REFS + "See [@doe2020].\n\n::: {#refs}\n:::\n";
+    const view = open(doc, render);
+    await settle();
+    view.dispatch({ changes: { from: doc.length, insert: "And [@roe].\n" } });
+    await settle();
+    expect(pending).toHaveLength(2);
+    const answer = (label: string, n: number): Answer => ({
+      citations: Array.from({ length: n }, () => "(x)"),
+      bibliography: [{ key: "doe2020", label: null, html: label }],
+      hangingIndent: false,
+      title: null,
+      warnings: [],
+    });
+    pending[1](answer("newer", 2));
+    await settle();
+    pending[0](answer("older", 1));
+    await settle();
+    view.dispatch({ selection: { anchor: 0 } });
+    expect(view.contentDOM.querySelector(".cm-refs")?.textContent).toBe(
+      "newer",
+    );
+  });
+
   it("shows the reference list at the refs block and its source on it", async () => {
     const doc = REFS + "See [@doe2020].\n\n::: {#refs}\n\n:::\n\nAfter.\n";
     const view = open(doc, stub().render);
