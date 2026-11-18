@@ -3,7 +3,13 @@ import taskLists from "markdown-it-task-lists";
 import sub from "markdown-it-sub";
 import sup from "markdown-it-sup";
 import footnotePlugin from "markdown-it-footnote";
-import { findCitations, type ParsedCitation } from "./citationsyntax";
+import {
+  findCitations,
+  REFS_CLOSE_RE,
+  REFS_OPEN_RE,
+  refsClasses,
+  type ParsedCitation,
+} from "./citationsyntax";
 import katexPluginImport from "@vscode/markdown-it-katex";
 import hljs from "highlight.js/lib/core";
 import javascript from "highlight.js/lib/languages/javascript";
@@ -381,62 +387,167 @@ export type CitationRenderer = (
 
 type Token = ReturnType<InstanceType<typeof MarkdownIt>["parse"]>[number];
 
-/** The reference list as pandoc prints it: `#refs` with one `csl-entry` per
- * work, a numeric style's label in a left margin. Empty without entries. */
-function referenceListHtml(
+/** The entries of the reference list as pandoc prints them: one
+ * `csl-entry` per work, a numeric style's label in a left margin. */
+function referenceEntriesHtml(
   rendered: RenderedCitations,
   escape: (text: string) => string,
 ): string {
-  if (rendered.bibliography.length === 0) return "";
-  const entries = rendered.bibliography.map(({ key, label, html }) => {
-    const body =
-      label === null
-        ? html
-        : `<div class="csl-left-margin">${label}</div>` +
-          `<div class="csl-right-inline">${html}</div>`;
-    return `<div id="ref-${escape(key)}" class="csl-entry" role="listitem">${body}</div>`;
-  });
-  const title =
-    rendered.title === null
-      ? ""
-      : `<h2 class="references-title">${escape(rendered.title)}</h2>\n`;
-  const classes = rendered.hangingIndent
-    ? "references csl-bib-body hanging-indent"
-    : "references csl-bib-body";
-  return `${title}<div id="refs" class="${classes}" role="list">\n${entries.join("\n")}\n</div>\n`;
+  return rendered.bibliography
+    .map(({ key, label, html }) => {
+      const body =
+        label === null
+          ? html
+          : `<div class="csl-left-margin">${label}</div>` +
+            `<div class="csl-right-inline">${html}</div>`;
+      return `<div id="ref-${escape(key)}" class="csl-entry" role="listitem">${body}</div>`;
+    })
+    .join("\n");
+}
+
+/** The classes pandoc gives the list's div, after the author's own. */
+function referenceClasses(rendered: RenderedCitations, own: string[]): string {
+  const ours = ["references", "csl-bib-body"];
+  if (rendered.hangingIndent) ours.push("hanging-indent");
+  return [...new Set([...own, ...ours])].join(" ");
 }
 
 /**
- * Put the list where pandoc puts it: in place of a `::: {#refs}` block, which
- * never prints, else at the end of the document, before the footnotes.
+ * Put the list where pandoc puts it: into every `::: {#refs}` block, after
+ * what the block already holds. Without a block the list goes to the end of
+ * the document, before the footnotes, under the `reference-section-title`
+ * heading when the header sets one; a block never gets that heading.
  */
-function placeReferenceList(tokens: Token[], html: string): void {
+function placeReferenceList(
+  tokens: Token[],
+  rendered: RenderedCitations,
+  escape: (text: string) => string,
+): void {
   const first = tokens[0];
-  if (first === undefined) return;
+  if (first === undefined || rendered.bibliography.length === 0) return;
   const Ctor = first.constructor as new (
     t: string,
     g: string,
     n: number,
   ) => Token;
-  const block = new Ctor("html_block", "", 0);
-  block.content = html;
-  const marker = tokens.findIndex(
-    (token, i) =>
-      token.type === "paragraph_open" &&
-      /^:::\s*\{#refs\}\s*(\n:::\s*)?$/.test(tokens[i + 1]?.content ?? ""),
-  );
-  if (marker !== -1) {
-    // `:::` on its own paragraph closes a block whose opener stood alone.
-    const closes =
-      !/\n:::\s*$/.test(tokens[marker + 1].content) &&
-      tokens[marker + 3]?.type === "paragraph_open" &&
-      tokens[marker + 4]?.content.trim() === ":::";
-    tokens.splice(marker, closes ? 6 : 3, block);
-    return;
+  const htmlBlock = (content: string) => {
+    const block = new Ctor("html_block", "", 0);
+    block.content = content;
+    return block;
+  };
+  const entries = referenceEntriesHtml(rendered, escape);
+  let placed = false;
+  for (let i = tokens.length - 1; i >= 0; i--) {
+    if (tokens[i].type !== "refs_close") continue;
+    let open = i - 1;
+    while (tokens[open].type !== "refs_open") open--;
+    const own = String(tokens[open].attrGet("class") ?? "").split(" ");
+    tokens[open].attrSet(
+      "class",
+      referenceClasses(rendered, own.filter(Boolean)),
+    );
+    tokens[open].attrSet("role", "list");
+    tokens.splice(i, 0, htmlBlock(entries + "\n"));
+    placed = true;
+    i = open;
   }
-  if (html === "") return;
+  if (placed) return;
+  const title =
+    rendered.title === null
+      ? ""
+      : `<h1 id="bibliography" class="unnumbered references-title">${escape(rendered.title)}</h1>\n`;
+  const list =
+    `${title}<div id="refs" class="${referenceClasses(rendered, [])}" role="list">\n` +
+    `${entries}\n</div>\n`;
   const footnotes = tokens.findIndex((t) => t.type === "footnote_block_open");
-  tokens.splice(footnotes === -1 ? tokens.length : footnotes, 0, block);
+  tokens.splice(
+    footnotes === -1 ? tokens.length : footnotes,
+    0,
+    htmlBlock(list),
+  );
+}
+
+/**
+ * Pandoc's `::: {#refs}` block as a div of its own, so the list can go into
+ * it once the backend has rendered. To markdown-it the fences are lines of
+ * paragraphs; a heading inside the block ends the opener's paragraph, so the
+ * closing fence may stand in a later one. A block that is never closed
+ * stays text. Without a list the block prints as an empty div, as in pandoc.
+ */
+function installRefsBlocks(md: InstanceType<typeof MarkdownIt>): void {
+  md.core.ruler.after("block", "ml_refs_blocks", (state: StateCore) => {
+    const tokens = state.tokens;
+    type Tok = (typeof tokens)[number];
+    const linesOf = (i: number) => tokens[i + 1].content.split("\n");
+    // A paragraph's lines from `at` on, as paragraph tokens; none if empty.
+    const paragraph = (at: number, lines: string[], from: number): Tok[] => {
+      if (lines.every((line) => line.trim() === "")) return [];
+      const start = tokens[at].map?.[0] ?? 0;
+      const map: [number, number] = [start + from, start + from + lines.length];
+      const open = new state.Token("paragraph_open", "p", 1);
+      const inline = new state.Token("inline", "", 0);
+      const close = new state.Token("paragraph_close", "p", -1);
+      open.map = map;
+      open.level = tokens[at].level;
+      inline.map = map;
+      inline.content = lines.join("\n");
+      inline.children = [];
+      inline.level = tokens[at].level + 1;
+      close.level = tokens[at].level;
+      for (const token of [open, inline, close]) token.block = true;
+      return [open, inline, close];
+    };
+    const fence = (type: string, nesting: 1 | -1, at: number, line: number) => {
+      const token = new state.Token(type, "div", nesting);
+      const start = (tokens[at].map?.[0] ?? 0) + line;
+      token.map = [start, start + 1];
+      token.level = tokens[at].level;
+      token.block = true;
+      return token;
+    };
+    for (let i = 0; i < tokens.length; i++) {
+      if (tokens[i].type !== "paragraph_open") continue;
+      const lines = linesOf(i);
+      if (!REFS_OPEN_RE.test(lines[0])) continue;
+      const open = fence("refs_open", 1, i, 0);
+      open.attrSet("id", "refs");
+      const classes = refsClasses(lines[0]);
+      if (classes.length > 0) open.attrSet("class", classes.join(" "));
+      // The closing fence: in the opener's own paragraph, or the first later
+      // paragraph at the same level that has one.
+      const inOwn = lines.findIndex((l, n) => n > 0 && REFS_CLOSE_RE.test(l));
+      if (inOwn !== -1) {
+        tokens.splice(
+          i,
+          3,
+          open,
+          ...paragraph(i, lines.slice(1, inOwn), 1),
+          fence("refs_close", -1, i, inOwn),
+          ...paragraph(i, lines.slice(inOwn + 1), inOwn + 1),
+        );
+        continue;
+      }
+      const level = tokens[i].level;
+      let j = i + 3;
+      let at = -1;
+      for (; j < tokens.length && tokens[j].level >= level; j++) {
+        if (tokens[j].type !== "paragraph_open" || tokens[j].level !== level)
+          continue;
+        at = linesOf(j).findIndex((l) => REFS_CLOSE_RE.test(l));
+        if (at !== -1) break;
+      }
+      if (at === -1) continue;
+      const closing = linesOf(j);
+      tokens.splice(
+        j,
+        3,
+        ...paragraph(j, closing.slice(0, at), 0),
+        fence("refs_close", -1, j, at),
+        ...paragraph(j, closing.slice(at + 1), at + 1),
+      );
+      tokens.splice(i, 3, open, ...paragraph(i, lines.slice(1), 1));
+    }
+  });
 }
 
 /**
@@ -659,6 +770,7 @@ function buildRenderer(
   md.use(footnotePlugin); // [^1] references + a footnotes section at the end
   installAdmonitions(md); // > [!NOTE] blockquotes → styled callout boxes
   installCitations(md); // [@key] and @key → tokens the backend renders
+  installRefsBlocks(md); // ::: {#refs} → the div the reference list goes into
 
   // Table borders/shading as INLINE styles on the elements — Paged.js's own
   // table styles (injected for fragmentation) strip stylesheet borders even
@@ -798,10 +910,7 @@ export async function renderDocumentHtmlAsync(
   ]);
   if (rendered !== null) {
     env.renderedCitations = rendered.citations;
-    placeReferenceList(
-      tokens,
-      referenceListHtml(rendered, md.utils.escapeHtml),
-    );
+    placeReferenceList(tokens, rendered, md.utils.escapeHtml);
   }
   return renderTokens(md, tokens, env, images, sourceLines);
 }

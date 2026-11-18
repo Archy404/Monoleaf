@@ -227,15 +227,76 @@ describe("renderDocumentHtml", () => {
       '<span class="citation">(Doe 2020, 3)</span> and @b.',
     );
     expect(html).not.toContain(":::");
-    const list = html.indexOf('<h2 class="references-title">References</h2>');
+    // An explicit block never gets the header's title, as in pandoc.
+    expect(html).not.toContain("References");
+    const list = html.indexOf(
+      '<div id="refs" class="references csl-bib-body hanging-indent" role="list">',
+    );
     expect(list).toBeGreaterThan(html.indexOf("Text"));
     expect(list).toBeLessThan(html.indexOf("After."));
     expect(html).toContain(
-      '<div id="refs" class="references csl-bib-body hanging-indent" role="list">',
-    );
-    expect(html).toContain(
       '<div id="ref-a" class="csl-entry" role="listitem">Doe. 2020. <i>A</i>.</div>',
     );
+  });
+
+  describe("the refs blocks, as pandoc fills them", () => {
+    const stub = () =>
+      Promise.resolve({
+        citations: ["(Doe 2020)"],
+        bibliography: [{ key: "a", label: null, html: "Doe. 2020." }],
+        hangingIndent: false,
+        title: "References",
+        warnings: [],
+      });
+    const render = (doc: string) =>
+      renderDocumentHtmlAsync(
+        doc,
+        "enhanced",
+        false,
+        () => Promise.resolve(new Map()),
+        stub,
+      );
+    const entry = '<div id="ref-a" class="csl-entry" role="listitem">';
+
+    it("fills every block with the whole list", async () => {
+      const html = await render(
+        "One [@a].\n\n::: {#refs}\n:::\n\nTwo.\n\n::: {#refs}\n\n:::\n",
+      );
+      expect(html.split(entry).length - 1).toBe(2);
+      expect(html).not.toContain(":::");
+      expect(html.indexOf(entry)).toBeLessThan(html.indexOf("Two."));
+    });
+
+    it("keeps what a block holds and puts the list after it", async () => {
+      const html = await render(
+        "See [@a].\n\n::: {#refs .small}\n# Works cited\n:::\n\nAfter.\n",
+      );
+      expect(html).toContain(
+        '<div id="refs" class="small references csl-bib-body" role="list">\n<h1>Works cited</h1>',
+      );
+      expect(html.indexOf("Works cited")).toBeLessThan(html.indexOf(entry));
+      expect(html.indexOf(entry)).toBeLessThan(html.indexOf("After."));
+      const inline = await render("See [@a].\n\n::: {#refs}\nSources:\n:::\n");
+      expect(inline).toContain("<p>Sources:</p>\n" + entry);
+    });
+
+    it("puts the title over the list only when there is no block", async () => {
+      const html = await render("See [@a].\n");
+      expect(html).toContain(
+        '<h1 id="bibliography" class="unnumbered references-title">References</h1>\n<div id="refs"',
+      );
+    });
+
+    it("leaves a block in code, an unclosed one and a block without citations", async () => {
+      const code = await render("See [@a].\n\n```\n::: {#refs}\n:::\n```\n");
+      expect(code).toContain("::: {#refs}");
+      expect(code).toContain('<h1 id="bibliography"');
+      const unclosed = await render("See [@a].\n\n::: {#refs}\n\nText.\n");
+      expect(unclosed).toContain("::: {#refs}");
+      const none = await render("No citations.\n\n::: {#refs}\n:::\n");
+      expect(none).toContain('<div id="refs"></div>');
+      expect(none).not.toContain(":::");
+    });
   });
 
   it("puts the list before the footnotes when the document has no #refs block", async () => {

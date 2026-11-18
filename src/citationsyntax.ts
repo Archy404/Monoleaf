@@ -125,3 +125,18 @@ export function findCitations(text: string): ParsedCitation[] {
   }
   return citations;
 }
+
+/**
+ * The opening fence of the block pandoc fills with the reference list:
+ * `::: {#refs}`, three or more colons, other attributes allowed after the id.
+ */
+export const REFS_OPEN_RE = /^:{3,}\s*\{\s*#refs(\s[^}]*)?\}\s*$/;
+
+/** A closing fence: three or more colons alone on the line. */
+export const REFS_CLOSE_RE = /^:{3,}\s*$/;
+
+/** The classes an opening fence gives its block, `.small` as "small". */
+export function refsClasses(line: string): string[] {
+  const attributes = REFS_OPEN_RE.exec(line)?.[1] ?? "";
+  return [...attributes.matchAll(/(?:^|\s)\.([\w-]+)/g)].map((m) => m[1]);
+}
