@@ -299,6 +299,49 @@ describe("renderDocumentHtml", () => {
     });
   });
 
+  describe("refsegment: a block lists its chapter's works", () => {
+    const entry = (key: string) => ({ key, label: null, html: `${key}.` });
+    const render = (doc: string) =>
+      renderDocumentHtmlAsync(
+        doc,
+        "enhanced",
+        false,
+        () => Promise.resolve(new Map()),
+        (citations) =>
+          Promise.resolve({
+            citations: citations.map(() => "(x)"),
+            bibliography: ["a", "b", "c"].map(entry),
+            hangingIndent: false,
+            title: null,
+            warnings: [],
+          }),
+      );
+    // The entries of each refs block, in document order.
+    const lists = (html: string) =>
+      html
+        .split('<div id="refs"')
+        .slice(1)
+        .map((block) =>
+          [...block.split("</div>\n</div>")[0].matchAll(/id="ref-(\w+)"/g)]
+            .map((m) => m[1])
+            .join(","),
+        );
+    const doc = (header: string) =>
+      `---\n${header}---\n\nOne [@a].\n\n::: {#refs}\n:::\n\n` +
+      `Two [@b] and a note.[^1]\n\n::: {#refs}\n:::\n\nAppendix [@a].\n\n` +
+      `::: {#refs}\n:::\n\n[^1]: The note cites [@c].\n`;
+
+    it("lists each chapter, a footnote at its mark, all at the last block", async () => {
+      const html = await render(doc("refsegment: true\n"));
+      expect(lists(html)).toEqual(["a", "b,c", "a,b,c"]);
+    });
+
+    it("lists every work at every block without the flag", async () => {
+      const html = await render(doc("csl: apa\n"));
+      expect(lists(html)).toEqual(["a,b,c", "a,b,c", "a,b,c"]);
+    });
+  });
+
   it("puts the list before the footnotes when the document has no #refs block", async () => {
     const doc = "See [@a][^1].\n\n[^1]: Note\n";
     const html = await renderDocumentHtmlAsync(

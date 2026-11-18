@@ -8,7 +8,10 @@ import {
   REFS_CLOSE_RE,
   REFS_OPEN_RE,
   refsClasses,
+  refsegmentOn,
+  segmentLists,
   type ParsedCitation,
+  type SegmentEvent,
 } from "./citationsyntax";
 import katexPluginImport from "@vscode/markdown-it-katex";
 import hljs from "highlight.js/lib/core";
@@ -24,6 +27,7 @@ import sql from "highlight.js/lib/languages/sql";
 import markdownLang from "highlight.js/lib/languages/markdown";
 import { EditorState, TransactionSpec } from "@codemirror/state";
 import { PortabilityMode } from "./portability";
+import { frontMatter } from "./meta";
 import { ADMONITIONS, admonitionKind } from "./admonitions";
 import { isRemoteUrl, remoteImagesAllowed } from "./remoteimages";
 import { escapeDashes } from "./htmlcomment";
@@ -390,10 +394,10 @@ type Token = ReturnType<InstanceType<typeof MarkdownIt>["parse"]>[number];
 /** The entries of the reference list as pandoc prints them: one
  * `csl-entry` per work, a numeric style's label in a left margin. */
 function referenceEntriesHtml(
-  rendered: RenderedCitations,
+  bibliography: RenderedCitations["bibliography"],
   escape: (text: string) => string,
 ): string {
-  return rendered.bibliography
+  return bibliography
     .map(({ key, label, html }) => {
       const body =
         label === null
@@ -413,15 +417,64 @@ function referenceClasses(rendered: RenderedCitations, own: string[]): string {
 }
 
 /**
+ * The refs blocks and citations of a parse in document order, as
+ * segmentLists takes them; a footnote's citations stand at its first mark.
+ */
+function segmentEvents(
+  tokens: Token[],
+  citations: readonly ParsedCitation[],
+): SegmentEvent[] {
+  const events: SegmentEvent[] = [];
+  const marks: { at: number; id: number }[] = [];
+  const inFootnote = new Map<number, SegmentEvent[]>();
+  let footnote: number | null = null;
+  for (const token of tokens) {
+    if (token.type === "footnote_open")
+      footnote = (token.meta as { id: number }).id;
+    else if (token.type === "footnote_close") footnote = null;
+    else if (token.type === "refs_open" && footnote === null)
+      events.push({ kind: "block" });
+    for (const child of token.children ?? []) {
+      if (child.type === "citation") {
+        const citation = citations[(child.meta as { index: number }).index];
+        const event: SegmentEvent = {
+          kind: "cite",
+          keys: citation.items.map((item) => item.key),
+        };
+        if (footnote === null) events.push(event);
+        else
+          inFootnote.set(footnote, [
+            ...(inFootnote.get(footnote) ?? []),
+            event,
+          ]);
+      } else if (child.type === "footnote_ref" && footnote === null) {
+        marks.push({
+          at: events.length,
+          id: (child.meta as { id: number }).id,
+        });
+      }
+    }
+  }
+  const seen = new Set<number>();
+  const first = marks.filter(({ id }) => !seen.has(id) && seen.add(id));
+  for (const { at, id } of first.reverse()) {
+    events.splice(at, 0, ...(inFootnote.get(id) ?? []));
+  }
+  return events;
+}
+
+/**
  * Put the list where pandoc puts it: into every `::: {#refs}` block, after
  * what the block already holds. Without a block the list goes to the end of
  * the document, before the footnotes, under the `reference-section-title`
- * heading when the header sets one; a block never gets that heading.
+ * heading when the header sets one; a block never gets that heading. With
+ * `refsegment` a block lists what segmentLists gives it.
  */
 function placeReferenceList(
   tokens: Token[],
   rendered: RenderedCitations,
   escape: (text: string) => string,
+  lists: readonly (ReadonlySet<string> | null)[],
 ): void {
   const first = tokens[0];
   if (first === undefined || rendered.bibliography.length === 0) return;
@@ -435,10 +488,12 @@ function placeReferenceList(
     block.content = content;
     return block;
   };
-  const entries = referenceEntriesHtml(rendered, escape);
+  const entries = referenceEntriesHtml(rendered.bibliography, escape);
   let placed = false;
+  let block = tokens.filter((t) => t.type === "refs_open").length;
   for (let i = tokens.length - 1; i >= 0; i--) {
     if (tokens[i].type !== "refs_close") continue;
+    const keys = lists[--block] ?? null;
     let open = i - 1;
     while (tokens[open].type !== "refs_open") open--;
     const own = String(tokens[open].attrGet("class") ?? "").split(" ");
@@ -447,7 +502,14 @@ function placeReferenceList(
       referenceClasses(rendered, own.filter(Boolean)),
     );
     tokens[open].attrSet("role", "list");
-    tokens.splice(i, 0, htmlBlock(entries + "\n"));
+    const listed =
+      keys === null
+        ? entries
+        : referenceEntriesHtml(
+            rendered.bibliography.filter((entry) => keys.has(entry.key)),
+            escape,
+          );
+    tokens.splice(i, 0, htmlBlock(listed + "\n"));
     placed = true;
     i = open;
   }
@@ -910,7 +972,9 @@ export async function renderDocumentHtmlAsync(
   ]);
   if (rendered !== null) {
     env.renderedCitations = rendered.citations;
-    placeReferenceList(tokens, rendered, md.utils.escapeHtml);
+    const events = segmentEvents(tokens, cited);
+    const lists = segmentLists(events, refsegmentOn(frontMatter(markdown)));
+    placeReferenceList(tokens, rendered, md.utils.escapeHtml, lists);
   }
   return renderTokens(md, tokens, env, images, sourceLines);
 }
