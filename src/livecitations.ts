@@ -29,8 +29,12 @@ import {
   findCitations,
   REFS_CLOSE_RE,
   REFS_OPEN_RE,
+  refsegmentOn,
+  segmentLists,
   type ParsedCitation,
+  type SegmentEvent,
 } from "./citationsyntax";
+import { footnoteLabelAt, footnoteRefPos } from "./footnotes";
 import type { RenderedCitations } from "./export";
 import { getCurrentDocumentPath } from "./localimages";
 import { frontMatter } from "./meta";
@@ -94,6 +98,8 @@ function collect(state: EditorState): Found[] {
  * the source when the cursor is on them. An empty block is replaced whole;
  * a block that holds text keeps it, and its closing fence shows the list. */
 interface RefsBlock {
+  /** The opening fence, where the block stands among the citations. */
+  at: number;
   from: number;
   to: number;
 }
@@ -109,7 +115,11 @@ function findRefsBlocks(state: EditorState): RefsBlock[] {
     for (let m = n + 1; m <= state.doc.lines; m++) {
       const next = state.doc.line(m);
       if (REFS_CLOSE_RE.test(next.text)) {
-        blocks.push({ from: empty ? line.from : next.from, to: next.to });
+        blocks.push({
+          at: line.from,
+          from: empty ? line.from : next.from,
+          to: next.to,
+        });
         n = m;
         break;
       }
@@ -344,39 +354,84 @@ class LiveCitations {
 const referenceList = StateField.define<{
   list: RenderedCitations | null;
   blocks: RefsBlock[];
+  /** What each block lists, recomputed when the text changes. */
+  keys: (ReadonlySet<string> | null)[];
   decorations: DecorationSet;
 }>({
-  create: (state) => ({
-    list: null,
-    blocks: findRefsBlocks(state),
-    decorations: Decoration.none,
-  }),
+  create: (state) => {
+    const blocks = findRefsBlocks(state);
+    return {
+      list: null,
+      blocks,
+      keys: blockLists(state, blocks),
+      decorations: Decoration.none,
+    };
+  },
   update(value, tr) {
-    let { list, blocks } = value;
+    let { list, blocks, keys } = value;
     for (const effect of tr.effects) {
       if (effect.is(rendered)) list = effect.value.result;
     }
-    if (tr.docChanged) blocks = findRefsBlocks(tr.state);
+    if (tr.docChanged) {
+      blocks = findRefsBlocks(tr.state);
+      keys = blockLists(tr.state, blocks);
+    }
     let decorations = Decoration.none;
     if (list !== null && list.bibliography.length > 0) {
-      const widget = new ReferenceListWidget(list);
-      const ranges = blocks
-        .filter((block) => !cursorOnLine(tr.state, block.from, block.to))
-        .map((block) =>
+      const ranges = blocks.flatMap((block, n) => {
+        if (cursorOnLine(tr.state, block.from, block.to)) return [];
+        const own = keys[n] ?? null;
+        const shown =
+          own === null
+            ? list
+            : {
+                ...list,
+                bibliography: list.bibliography.filter((e) => own.has(e.key)),
+              };
+        if (shown.bibliography.length === 0) return [];
+        const widget = new ReferenceListWidget(shown);
+        return [
           Decoration.replace({ widget, block: true }).range(
             block.from,
             block.to,
           ),
-        );
+        ];
+      });
       decorations = Decoration.set(ranges);
     }
-    return { list, blocks, decorations };
+    return { list, blocks, keys, decorations };
   },
   provide: (field) => [
     EditorView.decorations.from(field, (value) => value.decorations),
     EditorView.atomicRanges.of((view) => view.state.field(field).decorations),
   ],
 });
+
+/** What each block lists, as the export decides it: every work, or with
+ * `refsegment` its chapter's works; a footnote's citations count at its
+ * first mark. */
+function blockLists(
+  state: EditorState,
+  blocks: readonly RefsBlock[],
+): (ReadonlySet<string> | null)[] {
+  const header = frontMatter(state.doc.sliceString(0, 1 << 16));
+  if (!refsegmentOn(header)) return blocks.map(() => null);
+  const placed: { at: number; event: SegmentEvent }[] = collect(state).map(
+    (f) => {
+      const label = footnoteLabelAt(state, f.from);
+      const mark = label === null ? null : footnoteRefPos(state, label);
+      const keys = f.citation.items.map((item) => item.key);
+      return { at: mark ?? f.from, event: { kind: "cite", keys } };
+    },
+  );
+  for (const block of blocks)
+    placed.push({ at: block.at, event: { kind: "block" } });
+  placed.sort((a, b) => a.at - b.at);
+  return segmentLists(
+    placed.map((p) => p.event),
+    true,
+  );
+}
 
 function sourceOf(found: Found): string {
   return JSON.stringify(found.citation.items) + String(found.citation.inText);

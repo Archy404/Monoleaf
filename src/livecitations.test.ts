@@ -151,6 +151,32 @@ describe("live citations", () => {
     expect(view.contentDOM.querySelectorAll(".cm-refs")).toHaveLength(1);
   });
 
+  it("lists each chapter's works at its block with refsegment", async () => {
+    const render: LiveRenderer = (_header, citations) =>
+      Promise.resolve({
+        citations: citations.map(() => "(x)"),
+        bibliography: ["a", "b", "c"].map((key) => ({
+          key,
+          label: null,
+          html: key,
+        })),
+        hangingIndent: false,
+        title: null,
+        warnings: [],
+      });
+    const doc =
+      "---\nrefsegment: true\n---\n\nOne [@a].\n\n::: {#refs}\n:::\n\n" +
+      "Two [@b].[^1]\n\n::: {#refs}\n:::\n\nThree [@a].\n\n::: {#refs}\n:::\n\n" +
+      "[^1]: Note [@c].\n";
+    const view = open(doc, render);
+    view.dispatch({ selection: { anchor: 0 } });
+    await settle();
+    const lists = [...view.contentDOM.querySelectorAll(".cm-refs")].map(
+      (list) => list.textContent,
+    );
+    expect(lists).toEqual(["a", "bc", "abc"]);
+  });
+
   it("leaves a refs block alone without a list, in code and unclosed", async () => {
     const view = open("No citations.\n\n::: {#refs}\n:::\n", stub().render);
     await settle();
