@@ -87,6 +87,9 @@ pub fn references_from_biblatex(text: &str) -> References {
 
 /// The `.bib` file's entries in full, see references_from_biblatex.
 pub fn read_biblatex(text: &str, english_document: bool) -> Read {
+    // A byte-order mark is no whitespace: left in, it hides the first entry
+    // from the cut at every `@`.
+    let text = text.trim_start_matches('\u{feff}');
     if let Ok(bibliography) = biblatex::Bibliography::parse(text) {
         let items = bibliography
             .iter()
@@ -103,11 +106,11 @@ pub fn read_biblatex(text: &str, english_document: bool) -> Read {
             continue;
         };
         // An abbreviation defined here serves the entries after it.
-        if chunk[1..]
+        let is_string = chunk
             .trim_start()
-            .to_ascii_lowercase()
-            .starts_with("string")
-        {
+            .strip_prefix('@')
+            .is_some_and(|rest| rest.trim_start().to_ascii_lowercase().starts_with("string"));
+        if is_string {
             definitions.push_str(chunk);
             definitions.push('\n');
         }
@@ -493,6 +496,18 @@ fn normalise_dates(item: &mut Item, index: usize, warnings: &mut Vec<String>) {
         let Some(value) = item.0.get_mut(name) else {
             continue;
         };
+        // Date parts without a year, `[[]]`, make citationberg panic when
+        // the date is read; such a date is dropped before it gets there.
+        let no_year = matches!(
+            value,
+            Value::Date(DateValue::DateParts { date_parts, .. })
+                if date_parts.0.iter().any(|d| d.0.is_empty())
+        );
+        if no_year {
+            warnings.push(format!("entry {}: {name} has no year", index + 1));
+            item.0.remove(name);
+            continue;
+        }
         let range = match value {
             Value::Number(year) => year.to_string().parse::<FixedDateRange>().ok(),
             Value::String(text) => text.parse::<FixedDateRange>().ok(),
@@ -790,6 +805,33 @@ mod tests {
             references_from_biblatex("no entries here\n"),
             References::default()
         );
+    }
+
+    #[test]
+    fn a_csl_date_without_a_year_is_dropped_with_a_warning() {
+        for parts in ["[[]]", "[[\"\"]]"] {
+            let json =
+                format!(r#"[{{"id": "a", "title": "T", "issued": {{"date-parts": {parts}}}}}]"#);
+            let read = read_csl_json(&json).unwrap();
+            assert_eq!(read.references.len(), 1, "{parts}");
+            assert!(!read.references[0].item.0.contains_key("issued"), "{parts}");
+            assert_eq!(read.warnings, ["entry 1: issued has no year"], "{parts}");
+        }
+    }
+
+    #[test]
+    fn a_no_break_space_or_a_byte_order_mark_before_an_entry_costs_nothing() {
+        // `month = July` makes the whole file fail, so both go the entry-by-entry way.
+        let second = "@article{b, title={B}, month = July, year={2021}}\n";
+        let nbsp = format!("@article{{a, title={{A}}, year={{2020}}}}\n\u{a0}{second}");
+        let bom = format!("\u{feff}@article{{a, title={{A}}, year={{2020}}}}\n{second}");
+        for text in [nbsp, bom] {
+            let found = references_from_biblatex(&text);
+            let keys: Vec<&str> = found.entries.iter().map(|e| e.key.as_str()).collect();
+            assert_eq!(keys, ["a", "b"], "{text:?}");
+            assert_eq!(found.warnings.len(), 1, "{:?}", found.warnings);
+            assert!(found.warnings[0].contains("July"), "{:?}", found.warnings);
+        }
     }
 
     #[test]
