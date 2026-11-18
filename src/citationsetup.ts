@@ -224,7 +224,8 @@ function unquoteYaml(value: string): string {
 
 /**
  * The header lines for the dialog's values: a key the dialog leaves empty
- * is removed, so that the header says only what the dialog shows. The
+ * is removed, so that the header says only what the dialog shows; the two
+ * flags are always written, true or false. The
  * `references:` key is added only when asked for and never removed here.
  * With the template and a folder to write into, the example file joins the
  * bibliography; without a folder the example works go inline instead.
@@ -255,8 +256,8 @@ export function headerEntries(
           ? files[0]
           : files.map((f) => `- ${f}`),
     "reference-section-title": setup.sectionTitle || null,
-    "suppress-bibliography": setup.suppressBibliography ? "true" : null,
-    refsegment: setup.refsegment ? "true" : null,
+    "suppress-bibliography": String(setup.suppressBibliography),
+    refsegment: String(setup.refsegment),
   };
   if (inline) entries.references = EXAMPLE_REFERENCES;
   return entries;

@@ -1,6 +1,8 @@
 ---
 csl: chicago-author-date
 bibliography: example.bib
+suppress-bibliography: false
+refsegment: false
 ---
 
 # How to cite

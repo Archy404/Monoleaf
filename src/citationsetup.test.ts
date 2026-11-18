@@ -16,7 +16,7 @@ import { join } from "node:path";
 import { CITATION_FIXTURES_DIR } from "./corpus.testutil";
 
 describe("the references dialog", () => {
-  it("writes the keys it shows and removes the ones left empty", () => {
+  it("writes the keys it shows, both flags always, and removes the ones left empty", () => {
     const entries = headerEntries(
       {
         ...DEFAULT_SETUP,
@@ -33,7 +33,7 @@ describe("the references dialog", () => {
       lang: "de-DE",
       bibliography: ["- a.bib", "- b.json"],
       "reference-section-title": "Quellen",
-      "suppress-bibliography": null,
+      "suppress-bibliography": "false",
       refsegment: "true",
     });
     expect(headerEntries(DEFAULT_SETUP, true)).toEqual({
@@ -41,8 +41,8 @@ describe("the references dialog", () => {
       lang: null,
       bibliography: null,
       "reference-section-title": null,
-      "suppress-bibliography": null,
-      refsegment: null,
+      "suppress-bibliography": "false",
+      refsegment: "false",
     });
   });
 
