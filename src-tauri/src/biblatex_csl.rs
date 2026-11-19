@@ -197,8 +197,13 @@ pub fn item_of(entry: &Entry, english_document: bool) -> Item {
 /// where `crossref` sorts, so the fields arrive in Pandoc's order.
 const HELD_CROSSREF: &str = "crossref#";
 
-/// How many `crossref` links in a row are followed: a part, its volume and the
-/// multi-volume set make two, eight leaves room and still ends a cycle.
+/// `xdata` held as `crossref` is. It sorts after `crossref`, so what it gives
+/// comes later and wins, as in Pandoc.
+const HELD_XDATA: &str = "xdata#";
+
+/// How many `crossref` or `xdata` links in a row are followed: a part, its
+/// volume and the multi-volume set make two, eight leaves room and still ends
+/// a cycle.
 const CROSSREF_DEPTH: usize = 8;
 
 /// The fields Pandoc never passes from parent to child.
@@ -206,22 +211,30 @@ const NOT_INHERITED: &str = "ids xref entryset entrysubtype execute label option
     related relatedoptions relatedstring relatedtype shorthand shorthandintro sortkey";
 
 /// The entries of a `.bib` text, each with the fields it inherits through
-/// `crossref` as Pandoc's BibTeX reader gives them.
+/// `crossref` and `xdata` as Pandoc's BibTeX reader gives them, without the
+/// `@xdata` entries, which only hold fields.
 pub fn entries(text: &str) -> Result<Vec<Entry>, ParseError> {
     let mut raw = RawBibliography::parse(text)?;
     for pair in raw.entries.iter_mut().flat_map(|entry| &mut entry.v.fields) {
         if pair.key.v.eq_ignore_ascii_case("crossref") {
             pair.key.v = HELD_CROSSREF;
+        } else if pair.key.v.eq_ignore_ascii_case("xdata") {
+            pair.key.v = HELD_XDATA;
         }
     }
     let mut entries = Bibliography::from_raw(raw)?.into_vec();
     let inherited: Vec<_> = entries
         .iter()
-        .map(|entry| from_parent(entry, entry.get(HELD_CROSSREF), &entries, CROSSREF_DEPTH))
+        .map(|entry| {
+            [HELD_CROSSREF, HELD_XDATA]
+                .map(|held| from_parent(entry, entry.get(held), &entries, CROSSREF_DEPTH))
+                .concat()
+        })
         .collect();
     for (entry, fields) in entries.iter_mut().zip(inherited) {
         entry.fields.extend(fields);
     }
+    entries.retain(|entry| entry.entry_type != EntryType::XData);
     Ok(entries)
 }
 
@@ -259,7 +272,7 @@ fn parent_fields(
         if name == "author" && book_author && !child.fields.contains_key("bookauthor") {
             fields.push(("bookauthor".to_string(), value.clone()));
         }
-        if name == HELD_CROSSREF {
+        if name == HELD_CROSSREF || name == HELD_XDATA {
             let nested = from_parent(child, Some(value), entries, depth - 1);
             fields.extend(
                 nested
@@ -1840,5 +1853,26 @@ mod tests {
         assert_eq!(string(&part, "container-title"), Some("A"));
         assert_eq!(string(&part, "publisher"), Some("Pub"));
         assert_eq!(string(&part, "publisher-place"), Some("There"));
+    }
+
+    #[test]
+    fn an_xdata_field_wins_over_a_crossref_one_and_xdata_entries_are_dropped() {
+        let entries = entries(
+            "@inbook{part, xdata={x2, x1}, crossref={whole}, title={Part}, location={Own}, \
+             date={1999}} \
+             @book{whole, title={Whole}, publisher={Whole pub}, date={1980}} \
+             @xdata{x1, publisher={X1 pub}, note={X1 note}, date={2001}} \
+             @xdata{x2, note={X2 note}, xdata={x3}} \
+             @xdata{x3, edition={3}, note={X3 note}}",
+        )
+        .unwrap();
+        assert_eq!(entries.len(), 2);
+        let part = item_of(&entries[0], true);
+        assert_eq!(string(&part, "container-title"), Some("Whole"));
+        assert_eq!(string(&part, "publisher"), Some("X1 pub"));
+        assert_eq!(string(&part, "publisher-place"), Some("Own"));
+        assert_eq!(string(&part, "note"), Some("X2 note"));
+        assert_eq!(string(&part, "edition"), Some("3"));
+        assert_eq!(date(&part, "issued"), "[[1999]] ");
     }
 }
