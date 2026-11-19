@@ -119,6 +119,36 @@ const TEXT_COMMANDS: [(&str, bool); 16] = [
     ("enquote*", true),
 ];
 
+/// The named HTML references for the characters markup reserves.
+const MARKUP_ENTITIES: [(&str, char); 5] = [
+    ("amp", '&'),
+    ("lt", '<'),
+    ("gt", '>'),
+    ("quot", '"'),
+    ("apos", '\''),
+];
+
+/// The HTML 4 Latin-1 entity set (HTMLlat1.ent), in code point order from
+/// `LATIN_1_FIRST`: "nbsp" is U+00A0, "yuml" U+00FF.
+const LATIN_1_ENTITIES: [&str; 96] = [
+    "nbsp", "iexcl", "cent", "pound", "curren", "yen", "brvbar", "sect", "uml", "copy", "ordf",
+    "laquo", "not", "shy", "reg", "macr", "deg", "plusmn", "sup2", "sup3", "acute", "micro",
+    "para", "middot", "cedil", "sup1", "ordm", "raquo", "frac14", "frac12", "frac34", "iquest",
+    "Agrave", "Aacute", "Acirc", "Atilde", "Auml", "Aring", "AElig", "Ccedil", "Egrave", "Eacute",
+    "Ecirc", "Euml", "Igrave", "Iacute", "Icirc", "Iuml", "ETH", "Ntilde", "Ograve", "Oacute",
+    "Ocirc", "Otilde", "Ouml", "times", "Oslash", "Ugrave", "Uacute", "Ucirc", "Uuml", "Yacute",
+    "THORN", "szlig", "agrave", "aacute", "acirc", "atilde", "auml", "aring", "aelig", "ccedil",
+    "egrave", "eacute", "ecirc", "euml", "igrave", "iacute", "icirc", "iuml", "eth", "ntilde",
+    "ograve", "oacute", "ocirc", "otilde", "ouml", "divide", "oslash", "ugrave", "uacute", "ucirc",
+    "uuml", "yacute", "thorn", "yuml",
+];
+
+/// The code point of the first Latin-1 entity, the no-break space.
+const LATIN_1_FIRST: u32 = 0xA0;
+
+/// A `&#x` reference is hexadecimal.
+const HEX_RADIX: u32 = 16;
+
 /// The CSL item for one entry. Never fails: a field that cannot be read as
 /// its type is taken as text, a date that is no date becomes the literal
 /// text of the date. `english_document` says whether the citing document is
@@ -881,7 +911,8 @@ fn plain(chunks: ChunksRef) -> String {
 
 /// Text with TeX's conventions resolved: "--" an en dash, "---" an em dash,
 /// "~" a no-break space, an escaped character the character itself, quotes
-/// and apostrophes the typographic ones, a text command its argument.
+/// and apostrophes the typographic ones, a text command its argument, an
+/// HTML reference its character.
 fn unlatex(raw: &str) -> String {
     let mut out = String::with_capacity(raw.len());
     let mut chars = raw.chars().peekable();
@@ -928,6 +959,7 @@ fn unlatex(raw: &str) -> String {
                 closers.push("}");
             }
             '}' => out.push_str(closers.pop().unwrap_or("}")),
+            '&' => out.push(html_reference(&mut chars).unwrap_or(c)),
             _ => out.push(c),
         }
     }
@@ -937,6 +969,32 @@ fn unlatex(raw: &str) -> String {
 /// The name of the LaTeX command after a "\", with the "*" of a starred form.
 fn command_name(chars: &mut std::iter::Peekable<std::str::Chars>) -> String {
     std::iter::from_fn(|| chars.next_if(|c| c.is_ascii_alphabetic() || *c == '*')).collect()
+}
+
+/// The character of the HTML reference after a "&": "#233;", "#xE9;" or
+/// "eacute;". Its characters are consumed only when they form one.
+fn html_reference(chars: &mut std::iter::Peekable<std::str::Chars>) -> Option<char> {
+    let mut ahead = chars.clone();
+    let numeric = ahead.next_if_eq(&'#').is_some();
+    let mut name = String::new();
+    while let Some(c) = ahead.next_if(char::is_ascii_alphanumeric) {
+        name.push(c);
+    }
+    ahead.next_if_eq(&';')?;
+    let decoded = if numeric {
+        match name.strip_prefix(['x', 'X']) {
+            Some(hex) => u32::from_str_radix(hex, HEX_RADIX).ok(),
+            None => name.parse().ok(),
+        }
+        .and_then(char::from_u32)
+    } else if let Some(&(_, markup)) = MARKUP_ENTITIES.iter().find(|(entity, _)| *entity == name) {
+        Some(markup)
+    } else {
+        let index = LATIN_1_ENTITIES.iter().position(|entity| *entity == name)?;
+        char::from_u32(LATIN_1_FIRST + index as u32)
+    }?;
+    *chars = ahead;
+    Some(decoded)
 }
 
 #[cfg(test)]
@@ -1194,6 +1252,14 @@ mod tests {
         }
         let english = item("@book{k, title={\\emph{the Title} Rest}}");
         assert_eq!(string(&english, "title"), Some("The title rest"));
+    }
+
+    #[test]
+    fn html_character_references_become_characters_and_a_bare_ampersand_stays() {
+        let item =
+            item("@book{k, publisher={Soci&#233;t&#xE9; &Eacute;d. &amp; R&D, AT&T; &x; \\& Co}}");
+        let expected = "Société Éd. & R&D, AT&T; &x; & Co";
+        assert_eq!(string(&item, "publisher"), Some(expected));
     }
 
     #[test]
