@@ -103,8 +103,10 @@ const EPRINT_SITES: [(&str, &str); 4] = [
 /// The LaTeX commands whose argument prints as its text, and whether Pandoc
 /// sets it in quotation marks. Pandoc sets the others in italics, bold, small
 /// caps, superscript or subscript, which item text cannot carry. The argument
-/// of `uppercase` and `lowercase` keeps its case, which Pandoc changes.
-const TEXT_COMMANDS: [(&str, bool); 28] = [
+/// of `uppercase` and `lowercase` keeps its case, which Pandoc changes. A
+/// declaration such as `em` takes no argument; Pandoc prints the group after
+/// it as one.
+const TEXT_COMMANDS: [(&str, bool); 39] = [
     ("emph", false),
     ("textit", false),
     ("textbf", false),
@@ -127,6 +129,17 @@ const TEXT_COMMANDS: [(&str, bool); 28] = [
     ("nolinkurl", false),
     ("autocap", false),
     ("NoCaseChange", false),
+    ("em", false),
+    ("it", false),
+    ("bf", false),
+    ("sl", false),
+    ("tt", false),
+    ("rm", false),
+    ("itshape", false),
+    ("bfseries", false),
+    ("scshape", false),
+    ("slshape", false),
+    ("ttfamily", false),
     ("uppercase", false),
     ("MakeUppercase", false),
     ("lowercase", false),
@@ -1510,6 +1523,12 @@ mod tests {
         assert_eq!(string(&entry, "note"), Some("A B C D EF"));
         let entry = item(r"@misc{k, title={T}, note={\em text \it B \bf C \sc D}}");
         assert_eq!(string(&entry, "note"), Some("text B C D"));
+    }
+
+    #[test]
+    fn a_declaration_before_a_group_prints_the_group() {
+        let entry = item(r"@misc{k, title={T}, note={A \em{x} \ttfamily{y} \sf{z} B}}");
+        assert_eq!(string(&entry, "note"), Some("A x y  B"));
     }
 
     #[test]
