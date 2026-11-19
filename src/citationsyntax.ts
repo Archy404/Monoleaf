@@ -27,19 +27,53 @@ export function namesReferences(header: string): boolean {
 export const KEY_START = /[\p{L}\p{N}_]/u;
 const KEY_CHAR = /[\p{L}\p{N}_:.#$%&\-+?<>~/]/u;
 
+/** Whether the `@` at `at` opens a key: one that follows a letter or digit is
+ * part of an e-mail address; one after a backslash is escaped, as in pandoc
+ * and as Markdown reads `\@`. */
+function opensKey(text: string, at: number): boolean {
+  return at === 0 || !(KEY_START.test(text[at - 1]) || text[at - 1] === "\\");
+}
+
+/** The `}` that balances the `{` at `open`, or -1: pandoc reads no braced
+ * key across a space or without its closing brace. */
+function closingBrace(text: string, open: number): number {
+  let depth = 0;
+  for (let i = open; i < text.length && !/\s/.test(text[i]); i++) {
+    if (text[i] === "{") {
+      depth++;
+    } else if (text[i] === "}" && --depth === 0) {
+      return i;
+    }
+  }
+  return -1;
+}
+
 /**
  * The citation whose key spans `pos`, or null. The key may be empty when the
  * cursor sits right after a fresh `@`, which is what completion waits for.
- * A `@` that follows a letter or digit is part of an e-mail address; one
- * after a backslash is escaped, as in pandoc and as Markdown reads `\@`.
+ * A braced key, `@{key}`, holds any characters but spaces; `from` and `to`
+ * include the braces, `key` does not.
  */
 export function citationAt(text: string, pos: number): Citation | null {
+  const brace = text.lastIndexOf("@{", pos - 1) + 1;
+  const close = brace === 0 ? -1 : closingBrace(text, brace);
+  if (close !== -1 && brace <= pos && pos <= close + 1) {
+    if (!opensKey(text, brace - 1)) {
+      return null;
+    }
+    return {
+      from: brace - 1,
+      to: close + 1,
+      key: text.slice(brace + 1, close),
+    };
+  }
   let start = pos;
   while (start > 0 && KEY_CHAR.test(text[start - 1])) start--;
   const at = start - 1;
   if (text[at] !== "@") return null;
-  if (at > 0 && (KEY_START.test(text[at - 1]) || text[at - 1] === "\\"))
+  if (!opensKey(text, at)) {
     return null;
+  }
   if (start < text.length && !KEY_START.test(text[start]) && start < pos)
     return null;
   let end = pos;

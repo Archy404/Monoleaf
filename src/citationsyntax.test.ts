@@ -91,6 +91,25 @@ describe("findCitations", () => {
     expect(citationAt("@пункт3", 3)).toEqual({ from: 0, to: 7, key: "пункт3" });
   });
 
+  it("reads a braced key without the braces, which the span includes", () => {
+    expect(findCitations("[@{пункт3}, p. 3] and @{x.y}.")).toEqual([
+      {
+        from: 0,
+        to: 17,
+        items: [item("пункт3", { suffix: "p. 3" })],
+        inText: false,
+      },
+      { from: 22, to: 28, items: [item("x.y")], inText: true },
+    ]);
+    const key = { from: 4, to: 12, key: "a{b}c" };
+    expect(citationAt("see @{a{b}c}", 6)).toEqual(key);
+  });
+
+  it("reads no braced key unclosed, across a space or escaped", () => {
+    expect(findCitations("[@{doe, p. 3] @{a b} \\@{c} a@{d}")).toEqual([]);
+    expect(citationAt("@{doe", 5)).toBeNull();
+  });
+
   it("leaves e-mail addresses, plain brackets and empty keys alone", () => {
     expect(
       findCitations("write to jane@doe.org [not a citation] or @ me"),
