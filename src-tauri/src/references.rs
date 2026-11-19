@@ -90,7 +90,7 @@ pub fn read_biblatex(text: &str, english_document: bool) -> Read {
     // A byte-order mark is no whitespace: left in, it hides the first entry
     // from the cut at every `@`.
     let text = text.trim_start_matches('\u{feff}');
-    let text = &brace_quoted_values(text);
+    let text = &join_command_arguments(&brace_quoted_values(text));
     if let Ok(entries) = biblatex_csl::entries(text) {
         let items = entries
             .iter()
@@ -204,6 +204,40 @@ fn brace_quoted_values(text: &str) -> String {
         }
         at += 1;
     }
+    out
+}
+
+/// The text with the spaces between a command's name and its braced argument
+/// removed: `\foo {x}` becomes `\foo{x}`, as LaTeX reads it. The parser takes
+/// a brace after a space as text, not as the argument. An empty `{}` only ends
+/// the name, `\ldots {}`, and stays. Line numbers stay.
+fn join_command_arguments(text: &str) -> String {
+    let bytes = text.as_bytes();
+    let mut out = String::with_capacity(text.len());
+    let mut copied = 0;
+    let mut at = 0;
+    while at < bytes.len() {
+        if bytes[at] != b'\\' {
+            at += 1;
+            continue;
+        }
+        let name = bytes[at + 1..]
+            .iter()
+            .take_while(|b| b.is_ascii_alphabetic());
+        let name_end = at + 1 + name.count();
+        let spaces = bytes[name_end..]
+            .iter()
+            .take_while(|b| matches!(b, b' ' | b'\t'));
+        let brace = name_end + spaces.count();
+        let empty = bytes.get(brace + 1) == Some(&b'}');
+        if name_end > at + 1 && brace > name_end && bytes.get(brace) == Some(&b'{') && !empty {
+            out.push_str(&text[copied..name_end]);
+            copied = brace;
+        }
+        // An escape `\x` skips the character after the backslash.
+        at = name_end.max(at + 2);
+    }
+    out.push_str(&text[copied..]);
     out
 }
 
@@ -751,6 +785,14 @@ mod tests {
         // In an abbreviation and in a concatenation too.
         let bib = r#"@string{q = "{"}q{"}"} @misc{m, title = "A" # "{"}b{"}" # q}"#;
         assert_eq!(references_from_biblatex(bib).entries[0].title, r#"A"b""q""#);
+    }
+
+    #[test]
+    fn a_space_before_a_command_argument_changes_nothing() {
+        let bib = "@misc{k, title={T}, note={A \\foo {bar} \\emph  {x} Gar\\c {c}on \\ldots {} \\o {} \\em\t{y} B}}";
+        let read = read_biblatex(bib, true);
+        let note = Value::String("A  x Garçon … ø y B".into());
+        assert_eq!(read.references[0].item.0.get("note"), Some(&note));
     }
 
     #[test]
