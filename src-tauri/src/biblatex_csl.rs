@@ -226,10 +226,27 @@ fn key_text(value: &str) -> String {
 /// it: the main title is the title, the book's own becomes the volume title.
 /// A chapter of such a volume is in the main title, its book is the volume.
 /// Titles of an English entry go to sentence case, as Pandoc puts them, so a
-/// style may raise them again; a journal's name keeps its case.
+/// style may raise them again; a journal's name keeps its case. A periodical
+/// is an issue of a journal: its `title` names the journal, and its own title
+/// is the `issuetitle` where it has one.
 fn titles(entry: &Entry, item: &mut Fields, english_document: bool) {
     let english = english_document && is_english(entry);
-    let own = joined(entry, "title", "subtitle", "titleaddon", english);
+    let periodical = entry.entry_type == EntryType::Periodical;
+    let issue_or = |issue_field: &'static str, field: &'static str| {
+        if periodical && entry.get(issue_field).is_some() {
+            issue_field
+        } else {
+            field
+        }
+    };
+    let subtitle = issue_or("issuesubtitle", "subtitle");
+    let own = joined(
+        entry,
+        issue_or("issuetitle", "title"),
+        subtitle,
+        "titleaddon",
+        english,
+    );
     if !is_chapter_like(entry) && entry.get("maintitle").is_some() {
         item.set(
             "title",
@@ -248,7 +265,7 @@ fn titles(entry: &Entry, item: &mut Fields, english_document: bool) {
             Some(short) => Some(short),
             None => {
                 let title = titled(entry, "title", english);
-                let has_more = entry.get("subtitle").is_some()
+                let has_more = entry.get(subtitle).is_some()
                     || entry.get("titleaddon").is_some()
                     || title.as_deref().is_some_and(|t| t.contains(':'));
                 has_more.then(|| title.map(|t| before_colon(&t))).flatten()
@@ -256,7 +273,12 @@ fn titles(entry: &Entry, item: &mut Fields, english_document: bool) {
         };
         item.set("title-short", short);
     }
-    if is_chapter_like(entry) && entry.get("maintitle").is_some() {
+    if periodical {
+        item.set(
+            "container-title",
+            joined(entry, "title", "subtitle", "titleaddon", false),
+        );
+    } else if is_chapter_like(entry) && entry.get("maintitle").is_some() {
         item.set(
             "container-title",
             joined(
@@ -302,7 +324,12 @@ fn titles(entry: &Entry, item: &mut Fields, english_document: bool) {
     } else {
         item.set("container-title", text(entry, "journal"));
     }
-    item.set("container-title-short", text(entry, "shortjournal"));
+    item.set(
+        "container-title-short",
+        text(entry, "shorttitle")
+            .filter(|_| periodical)
+            .or_else(|| text(entry, "shortjournal")),
+    );
     item.set("collection-title", series(entry, english));
     item.set("event", titled(entry, "eventtitle", english));
     item.set("original-title", titled(entry, "origtitle", english));
@@ -1131,6 +1158,31 @@ mod tests {
         assert_eq!(string(&colon, "title-short"), Some("Molecular cloning"));
         let plain = item("@book{k, title={No Colon Here}}");
         assert_eq!(string(&plain, "title-short"), None);
+    }
+
+    #[test]
+    fn a_periodical_is_an_issue_of_the_journal_its_title_names() {
+        let issue = item(
+            "@periodical{k, title={Computers and Graphics}, \
+             issuetitle={Semantic {3D} Media}, issuesubtitle={A Survey}}",
+        );
+        assert_eq!(string(&issue, "type"), Some("article-journal"));
+        assert_eq!(string(&issue, "title"), Some("Semantic 3D media: A survey"));
+        assert_eq!(
+            string(&issue, "container-title"),
+            Some("Computers and Graphics")
+        );
+        assert_eq!(
+            string(&issue, "title-short"),
+            Some("Computers and graphics")
+        );
+        let journal = item("@periodical{k, title={Computers and Graphics}, shorttitle={CaG}}");
+        assert_eq!(string(&journal, "title"), Some("Computers and graphics"));
+        assert_eq!(
+            string(&journal, "container-title"),
+            Some("Computers and Graphics")
+        );
+        assert_eq!(string(&journal, "container-title-short"), Some("CaG"));
     }
 
     #[test]
