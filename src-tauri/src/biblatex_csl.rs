@@ -13,9 +13,9 @@ use std::collections::BTreeMap;
 const PHD_THESIS: &str = "PhD thesis";
 const MASTERS_THESIS: &str = "Master's thesis";
 
-/// The `type` and `pubstate` values BibLaTeX defines as keys, with their
-/// English text; any other value is taken as its own text.
-const KEY_TEXTS: [(&str, &str); 14] = [
+/// BibLaTeX localisation keys with their English text from BibLaTeX's
+/// `english.lbx`, as Pandoc prints them; any other value is its own text.
+const KEY_TEXTS: [(&str, &str); 34] = [
     ("bathesis", "Bachelor's thesis"),
     ("mathesis", MASTERS_THESIS),
     ("phdthesis", PHD_THESIS),
@@ -30,7 +30,30 @@ const KEY_TEXTS: [(&str, &str); 14] = [
     ("forthcoming", "forthcoming"),
     ("inpress", "in press"),
     ("prepublished", "pre-published"),
+    ("countryde", "Germany"),
+    ("countryeu", "European Union"),
+    ("countryep", "European Union"),
+    ("countryfr", "France"),
+    ("countryuk", "United Kingdom"),
+    ("countryus", "United States of America"),
+    ("patent", "patent"),
+    ("patentde", "German patent"),
+    ("patenteu", "European patent"),
+    ("patentfr", "French patent"),
+    ("patentuk", "British patent"),
+    ("patentus", "U.S. patent"),
+    ("patreq", "patent request"),
+    ("patreqde", "German patent request"),
+    ("patreqeu", "European patent request"),
+    ("patreqfr", "French patent request"),
+    ("patrequk", "British patent request"),
+    ("patrequs", "U.S. patent request"),
+    ("newseries", "new series"),
+    ("oldseries", "old series"),
 ];
+
+/// The start of the command that prints a key's text, as the parser keeps it.
+const BIBSTRING: &str = "\\bibstring{";
 
 /// The `pubstate` texts a `year` field may hold instead of a year.
 const STATUS_TEXTS: [&str; 5] = [
@@ -220,6 +243,27 @@ fn key_text(value: &str) -> String {
         .iter()
         .find(|(name, _)| *name == key)
         .map_or_else(|| value.to_string(), |(_, text)| text.to_string())
+}
+
+/// Text with every word that is a BibLaTeX key replaced by the key's text.
+fn keys_resolved(value: &str) -> String {
+    value.split(' ').map(key_text).collect::<Vec<_>>().join(" ")
+}
+
+/// Text with every `\bibstring{key}` replaced by the key's text.
+fn bibstrings_resolved(raw: &str) -> String {
+    let mut out = String::new();
+    let mut rest = raw;
+    while let Some((before, after)) = rest.split_once(BIBSTRING) {
+        let Some((key, tail)) = after.split_once('}') else {
+            break;
+        };
+        out.push_str(before);
+        out.push_str(&key_text(key));
+        rest = tail;
+    }
+    out.push_str(rest);
+    out
 }
 
 /// Title, container and series. A book with a `maintitle` is a volume of
@@ -464,7 +508,7 @@ fn publishers(entry: &Entry, item: &mut Fields) {
     let address = listed(entry, "address");
     if is_patent {
         item.set("publisher-place", address);
-        item.set("jurisdiction", location);
+        item.set("jurisdiction", location.map(|l| keys_resolved(&l)));
     } else {
         item.set("publisher-place", address.or(location));
     }
@@ -723,6 +767,7 @@ fn sentence_case_of(chunks: ChunksRef) -> String {
     for chunk in chunks {
         match &chunk.v {
             Chunk::Normal(text) => {
+                let text = bibstrings_resolved(text);
                 let mut word = String::new();
                 let mut chars = text.chars().peekable();
                 while let Some(c) = chars.next() {
@@ -803,7 +848,7 @@ fn listed(entry: &Entry, field: &str) -> Option<String> {
 
 /// Chunks as plain text: braces gone, what LaTeX writes as text resolved.
 fn plain(chunks: ChunksRef) -> String {
-    unlatex(&chunks.format_verbatim())
+    unlatex(&bibstrings_resolved(&chunks.format_verbatim()))
 }
 
 /// Text with TeX's conventions resolved: "--" an en dash, "---" an em dash,
@@ -1268,5 +1313,19 @@ mod tests {
             let entry = item(&format!("@book{{k, title={{{title}}}}}"));
             assert_eq!(string(&entry, "title"), Some(expected), "{title}");
         }
+    }
+
+    #[test]
+    fn localisation_keys_print_their_english_text() {
+        let patent = item("@patent{p, title={T}, location={Near countryfr}, type={patenteu}}");
+        assert_eq!(string(&patent, "jurisdiction"), Some("Near France"));
+        assert_eq!(string(&patent, "genre"), Some("European patent"));
+        let book = item(
+            r"@book{b, title={The Title: \bibstring{newseries}},
+              note={In \bibstring{countryuk}}, location={countryfr}}",
+        );
+        assert_eq!(string(&book, "title"), Some("The title: New series"));
+        assert_eq!(string(&book, "note"), Some("In United Kingdom"));
+        assert_eq!(string(&book, "publisher-place"), Some("countryfr"));
     }
 }
