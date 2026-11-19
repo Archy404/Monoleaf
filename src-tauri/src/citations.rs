@@ -435,9 +435,8 @@ fn html(children: &ElemChildren) -> String {
     out
 }
 
-/// A rendering without a letter or digit, such as the note "." of a style
-/// that prints the number of the note that first cited the work: no request
-/// carries a note number.
+/// A rendering without a letter or digit, such as the "[]" of hayagriva's
+/// own alphanumeric style, which prints no label.
 fn is_empty(children: &ElemChildren) -> bool {
     let mut text = String::new();
     let _ = children.write_buf(&mut text, BufWriteFormat::Plain);
@@ -701,8 +700,12 @@ pub fn render(
                 }
             })
             .collect();
+        // In a note style every citation is its own footnote, numbered in
+        // document order as pandoc numbers them; hayagriva ignores the
+        // number in other styles.
+        let note = Some(index + 1);
         let request =
-            CitationRequest::new(items, request_style, Some(locale.clone()), locales, None);
+            CitationRequest::new(items, request_style, Some(locale.clone()), locales, note);
         driver.citation(request);
     }
     let request = BibliographyRequest::new(style, Some(locale.clone()), locales);
@@ -1073,6 +1076,24 @@ mod tests {
 
     #[test]
     fn a_citation_rendered_empty_stays_as_written_with_a_warning() {
+        let references = read_biblatex(BIB, true).references;
+        // hayagriva's own alphanumeric style prints "[]" without its label.
+        let style = style_named(Some("alphanumeric")).unwrap();
+        let out = render(
+            &references,
+            &style,
+            &LocaleCode::en_us(),
+            &[cite(&["doe2020"])],
+        );
+        assert_eq!(out.citations, [None]);
+        assert_eq!(
+            out.warnings,
+            ["citation 1: the style alphanumeric prints nothing for it here; it stays as written"]
+        );
+    }
+
+    #[test]
+    fn a_repeated_citation_in_a_note_style_names_the_note_that_first_cited_it() {
         let mut references = read_biblatex(BIB, true).references;
         references.extend(read_csl_yaml(ISSUE_EXAMPLE).unwrap().references);
         let mut again = cite(&["doe2020"]);
@@ -1083,15 +1104,8 @@ mod tests {
             render(&references, &style, &LocaleCode::en_us(), &cited)
         };
         let gb = render_in("gb-7714-2015-note");
-        assert!(gb.citations[..2].iter().all(Option::is_some));
-        assert_eq!(gb.citations[2], None);
-        assert_eq!(
-            gb.warnings,
-            [
-                "citation 3: the style china-national-standard-gb-t-7714-2015-note \
-              prints nothing for it here; it stays as written"
-            ]
-        );
+        assert!(gb.warnings.is_empty(), "{:?}", gb.warnings);
+        assert_eq!(gb.citations[2].as_deref(), Some("同1"));
         let notes = render_in("chicago-shortened-notes");
         assert!(notes.warnings.is_empty(), "{:?}", notes.warnings);
         assert_eq!(
