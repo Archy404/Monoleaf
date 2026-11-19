@@ -152,6 +152,10 @@ const LATIN_1_FIRST: u32 = 0xA0;
 /// A `&#x` reference is hexadecimal.
 const HEX_RADIX: u32 = 16;
 
+/// What splits a title into words, besides a space, where Pandoc decides
+/// which word is the last: "answer.here" is one word, "Answer-here" two.
+const WORD_SEPARATORS: &str = "-\u{2013}\u{2014}/~";
+
 /// The CSL item for one entry. Never fails: a field that cannot be read as
 /// its type is taken as text, a date that is no date becomes the literal
 /// text of the date. `english_document` says whether the citing document is
@@ -921,13 +925,14 @@ fn titled(entry: &Entry, field: &str, sentence_case: bool) -> Option<String> {
 /// only when its first letter is its only capital, so "NASA", "McDonald" and
 /// "iPhone" stay; the first word, and the first after a ":", "?", "!" or "."
 /// that ends a word (not the one in "a:b", "http://" or "u.s"), gets a
-/// capital unless it has one of its own, as "eBay"; a word with a digit, as
+/// capital unless it has one of its own, as "eBay", or is the title's last
+/// word, as "answer" in "Why cite? answer"; a word with a digit, as
 /// "A2605", stays as written; a hyphen ends a word; what braces protect stays
 /// as written.
 fn sentence_case_of(chunks: ChunksRef) -> String {
     let mut out = String::new();
     let mut sentence_start = true;
-    for chunk in chunks {
+    for (index, chunk) in chunks.iter().enumerate() {
         match &chunk.v {
             Chunk::Normal(text) => {
                 let text = bibstrings_resolved(text);
@@ -947,7 +952,10 @@ fn sentence_case_of(chunks: ChunksRef) -> String {
                     flush_word(&mut word, &mut out, &mut sentence_start);
                     out.push(c);
                     let ends_word = chars.peek().is_none_or(|next| next.is_whitespace());
-                    if matches!(c, ':' | '?' | '!' | '.') && ends_word {
+                    if matches!(c, ':' | '?' | '!' | '.')
+                        && ends_word
+                        && !is_last_word(chars.clone(), &chunks[index + 1..])
+                    {
                         sentence_start = true;
                     }
                 }
@@ -966,6 +974,17 @@ fn sentence_case_of(chunks: ChunksRef) -> String {
         }
     }
     out
+}
+
+/// Whether the rest of a title is a single word, punctuation included.
+fn is_last_word(rest: std::iter::Peekable<std::str::Chars>, later: ChunksRef) -> bool {
+    let later = later.iter().flat_map(|chunk| match &chunk.v {
+        Chunk::Normal(text) | Chunk::Verbatim(text) | Chunk::Math(text) => text.chars(),
+    });
+    let rest: String = rest.chain(later).collect();
+    !rest
+        .trim()
+        .contains(|c: char| c.is_whitespace() || WORD_SEPARATORS.contains(c))
 }
 
 /// Appends the word in its sentence-case form and clears it: capitalised at
@@ -1540,6 +1559,14 @@ mod tests {
             ),
             ("eBay Markets", "eBay markets"),
             ("Why Cite? A Short Answer", "Why cite? A short answer"),
+            ("Why Cite? answer", "Why cite? answer"),
+            ("Report: Second", "Report: second"),
+            ("The U.S. Treasury", "The u.s. treasury"),
+            ("Why? (Answer).", "Why? (answer)."),
+            ("Why? Answer.Here", "Why? answer.here"),
+            ("Why? Answer-Here {X}", "Why? Answer-here X"),
+            ("Report: Second Part", "Report: Second part"),
+            ("answer", "Answer"),
             ("report. second part", "Report. Second part"),
             ("the u.s. treasury report", "The u.s. Treasury report"),
             ("Apples vs. the Oranges here", "Apples vs. The oranges here"),
