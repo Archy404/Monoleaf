@@ -3,7 +3,10 @@
 //! CSL JSON, and like Pandoc prints them. A field Pandoc does not read is not
 //! read here either.
 
-use biblatex::{Chunk, Chunks, ChunksExt, ChunksRef, Date, DateValue as BibDate, Entry, EntryType};
+use biblatex::{
+    Bibliography, Chunk, Chunks, ChunksExt, ChunksRef, Date, DateValue as BibDate, Entry,
+    EntryType, ParseError, RawBibliography,
+};
 use hayagriva::citationberg::json::{
     DateValue, Item, LiteralName, NameItem, NameValue, Value, VecDate, VecDateRange,
 };
@@ -166,6 +169,99 @@ pub fn item_of(entry: &Entry, english_document: bool) -> Item {
     names(entry, &mut item);
     dates(entry, &mut item);
     Item(item.0)
+}
+
+/// `crossref` under a name no `.bib` field has, so that
+/// `Bibliography::from_raw` does not resolve it by its own rules. It sorts
+/// where `crossref` sorts, so the fields arrive in Pandoc's order.
+const HELD_CROSSREF: &str = "crossref#";
+
+/// How many `crossref` links in a row are followed: a part, its volume and the
+/// multi-volume set make two, eight leaves room and still ends a cycle.
+const CROSSREF_DEPTH: usize = 8;
+
+/// The fields Pandoc never passes from parent to child.
+const NOT_INHERITED: &str = "ids xref entryset entrysubtype execute label options presort \
+    related relatedoptions relatedstring relatedtype shorthand shorthandintro sortkey";
+
+/// The entries of a `.bib` text, each with the fields it inherits through
+/// `crossref` as Pandoc's BibTeX reader gives them.
+pub fn entries(text: &str) -> Result<Vec<Entry>, ParseError> {
+    let mut raw = RawBibliography::parse(text)?;
+    for pair in raw.entries.iter_mut().flat_map(|entry| &mut entry.v.fields) {
+        if pair.key.v.eq_ignore_ascii_case("crossref") {
+            pair.key.v = HELD_CROSSREF;
+        }
+    }
+    let mut entries = Bibliography::from_raw(raw)?.into_vec();
+    let inherited: Vec<_> = entries
+        .iter()
+        .map(|entry| from_parent(entry, entry.get(HELD_CROSSREF), &entries, CROSSREF_DEPTH))
+        .collect();
+    for (entry, fields) in entries.iter_mut().zip(inherited) {
+        entry.fields.extend(fields);
+    }
+    Ok(entries)
+}
+
+/// The fields `child` lacks and takes from the entry `key` names, with those
+/// of that entry's own parent; of two with one name the later wins.
+fn from_parent(
+    child: &Entry,
+    key: Option<ChunksRef>,
+    entries: &[Entry],
+    depth: usize,
+) -> Vec<(String, Chunks)> {
+    let key = key.map(|key| key.format_verbatim());
+    let parent = entries
+        .iter()
+        .find(|entry| Some(&entry.key) == key.as_ref());
+    let Some(parent) = parent.filter(|_| depth > 0) else {
+        return Vec::new();
+    };
+    let mut fields = Vec::new();
+    for (name, value) in &parent.fields {
+        if name == HELD_CROSSREF {
+            let nested = from_parent(child, Some(value), entries, depth - 1);
+            fields.extend(
+                nested
+                    .into_iter()
+                    .filter(|(n, _)| !parent.fields.contains_key(n)),
+            );
+        } else if let Some(target) = inherited_name(&parent.entry_type, &child.entry_type, name) {
+            if !child.fields.contains_key(&target) {
+                fields.push((target, value.clone()));
+            }
+        }
+    }
+    fields
+}
+
+/// The name a parent's field takes in the child, after Pandoc's
+/// `transformKey` (Appendix C of the BibLaTeX manual); `None` for a field
+/// that is not inherited.
+fn inherited_name(parent: &EntryType, child: &EntryType, name: &str) -> Option<String> {
+    use EntryType::*;
+    if NOT_INHERITED.split_whitespace().any(|field| field == name) {
+        return None;
+    }
+    let prefix = match (parent, child) {
+        (MvBook, Book | InBook | BookInBook | SuppBook)
+        | (MvCollection | MvReference, Collection | Reference | InCollection)
+        | (MvCollection | MvReference, InReference | SuppCollection)
+        | (MvProceedings, Proceedings | InProceedings) => "main",
+        (Book, InBook | BookInBook | SuppBook)
+        | (Collection | Reference, InCollection | InReference | SuppCollection)
+        | (Proceedings, InProceedings) => "book",
+        (Periodical, Article | SuppPeriodical) => "journal",
+        _ => return Some(name.to_string()),
+    };
+    match name {
+        "title" | "subtitle" => Some(format!("{prefix}{name}")),
+        "titleaddon" if prefix != "journal" => Some(format!("{prefix}{name}")),
+        "shorttitle" | "sorttitle" | "indextitle" | "indexsorttitle" => None,
+        _ => Some(name.to_string()),
+    }
 }
 
 /// The variables of an item while it is built; `set` with `None` sets nothing.
@@ -1468,5 +1564,34 @@ mod tests {
         assert_eq!(string(&book, "title"), Some("The title: New series"));
         assert_eq!(string(&book, "note"), Some("In United Kingdom"));
         assert_eq!(string(&book, "publisher-place"), Some("countryfr"));
+    }
+
+    #[test]
+    fn a_crossref_child_takes_the_fields_it_lacks_from_its_parent() {
+        let entries = entries(
+            "@inbook{part, crossref={whole}, title={Part}, publisher={Own}} \
+             @book{whole, title={Whole}, publisher={Pub}, location={Here}, date={1970}}",
+        )
+        .unwrap();
+        let part = item_of(&entries[0], true);
+        assert_eq!(string(&part, "title"), Some("Part"));
+        assert_eq!(string(&part, "container-title"), Some("Whole"));
+        assert_eq!(string(&part, "publisher"), Some("Own"));
+        assert_eq!(string(&part, "publisher-place"), Some("Here"));
+        assert_eq!(date(&part, "issued"), "[[1970]] ");
+    }
+
+    #[test]
+    fn a_crossref_chain_gives_the_nearest_parents_date() {
+        let entries = entries(
+            "@inbook{part, crossref={volume}, title={Part}} \
+             @book{volume, crossref={set}, title={Volume}, date={1975}} \
+             @mvbook{set, title={Set}, publisher={Pub}, date={1970/1980}}",
+        )
+        .unwrap();
+        let part = item_of(&entries[0], true);
+        assert_eq!(date(&part, "issued"), "[[1975]] ");
+        assert_eq!(string(&part, "publisher"), Some("Pub"));
+        assert_eq!(date(&item_of(&entries[1], true), "issued"), "[[1975]] ");
     }
 }

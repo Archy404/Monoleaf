@@ -90,8 +90,8 @@ pub fn read_biblatex(text: &str, english_document: bool) -> Read {
     // A byte-order mark is no whitespace: left in, it hides the first entry
     // from the cut at every `@`.
     let text = text.trim_start_matches('\u{feff}');
-    if let Ok(bibliography) = biblatex::Bibliography::parse(text) {
-        let items = bibliography
+    if let Ok(entries) = biblatex_csl::entries(text) {
+        let items = entries
             .iter()
             .map(|entry| biblatex_csl::item_of(entry, english_document))
             .collect();
