@@ -13,7 +13,8 @@ use hayagriva::citationberg::{
 };
 use hayagriva::{
     BibliographyDriver, BibliographyRequest, BufWriteFormat, CitationItem, CitationRequest,
-    CitePurpose, Elem, ElemChild, ElemChildren, Formatted, LocatorPayload, SpecificLocator,
+    CitePurpose, Elem, ElemChild, ElemChildren, ElemMeta, Formatted, Formatting, LocatorPayload,
+    SpecificLocator,
 };
 use std::collections::HashMap;
 use std::panic::{catch_unwind, AssertUnwindSafe};
@@ -97,11 +98,11 @@ pub struct Citation {
 #[serde(rename_all = "camelCase")]
 pub struct CitedItem {
     pub key: String,
-    /// Text before the key, `see`; placed only for the first item of a group.
+    /// Text before the key, `see`.
     #[serde(default)]
     pub prefix: String,
     /// Text after the key, `p. 3, emphasis added`: a locator at its start is
-    /// read out, the rest is placed only for the last item of a group.
+    /// read out, the rest follows the item.
     #[serde(default)]
     pub suffix: String,
     /// `-@key`: the author is left out, "(2020)" in author-date styles.
@@ -328,6 +329,58 @@ fn in_parentheses(html: String) -> String {
     format!("({})", html.strip_suffix('.').unwrap_or(&html))
 }
 
+/// The affixes decorate() cannot reach: every prefix but the first item's goes
+/// in front of its item, every suffix but the last item's after it. hayagriva
+/// marks each item it prints with the item's index. False when an item with
+/// such an affix was collapsed away, so its affix has no place.
+fn place_inner_affixes(
+    children: &mut ElemChildren,
+    citation: &Citation,
+    suffixes: &[&str],
+) -> bool {
+    let last = citation.items.len().saturating_sub(1);
+    let text = |text: String| {
+        ElemChild::Text(Formatted {
+            text,
+            formatting: Formatting::default(),
+        })
+    };
+    let mut affixes: Vec<_> = citation
+        .items
+        .iter()
+        .zip(suffixes)
+        .enumerate()
+        .map(|(i, (item, suffix))| {
+            let (prefix, suffix) = (item.prefix.trim(), suffix.trim());
+            (
+                (i > 0 && !prefix.is_empty()).then(|| text(format!("{prefix} "))),
+                (i < last && !suffix.is_empty()).then(|| text(format!(", {suffix}"))),
+            )
+        })
+        .collect();
+    let mut out = Vec::with_capacity(children.0.len());
+    for child in children.0.drain(..) {
+        let entry = match &child {
+            ElemChild::Elem(Elem {
+                meta: Some(ElemMeta::Entry(index)),
+                ..
+            }) => affixes.get_mut(*index),
+            _ => None,
+        };
+        let Some((prefix, suffix)) = entry else {
+            out.push(child);
+            continue;
+        };
+        out.extend(prefix.take());
+        out.push(child);
+        out.extend(suffix.take());
+    }
+    children.0 = out;
+    affixes
+        .iter()
+        .all(|(prefix, suffix)| prefix.is_none() && suffix.is_none())
+}
+
 /// Only a citation of one work drops its author; numeric styles never do.
 fn suppresses_author(citation: &Citation, style: &IndependentStyle) -> bool {
     citation.items.len() == 1 && citation.items[0].suppress_author && !is_numeric(style)
@@ -455,16 +508,6 @@ pub fn render(
                 }
             }
         }
-        let inner = citation.items.iter().enumerate().any(|(i, item)| {
-            (i > 0 && !item.prefix.trim().is_empty())
-                || (i + 1 < citation.items.len() && !suffixes[index][i].trim().is_empty())
-        });
-        if inner {
-            out.warnings.push(format!(
-                "citation {}: only the first prefix and the last suffix of a group are printed",
-                index + 1
-            ));
-        }
         if citation.items.len() > 1 && citation.items.iter().any(|item| item.suppress_author) {
             out.warnings.push(format!(
                 "citation {}: -@ is ignored inside a group",
@@ -509,7 +552,17 @@ pub fn render(
         );
         return out;
     };
-    for ((index, _), citation) in cited.iter().zip(rendered.citations) {
+    for ((index, _), mut citation) in cited.iter().zip(rendered.citations) {
+        if !place_inner_affixes(
+            &mut citation.citation,
+            &citations[*index],
+            &suffixes[*index],
+        ) {
+            out.warnings.push(format!(
+                "citation {}: a prefix or suffix inside a collapsed group is not printed",
+                index + 1
+            ));
+        }
         let text = html(&citation.citation);
         let citation = &citations[*index];
         let mut text = decorate(text, citation, &suffixes[*index], style);
@@ -729,7 +782,7 @@ mod tests {
                 "(Doe &amp; Roe, 2020, p. 12)"
             ]
         );
-        assert_eq!(apa.warnings.len(), 2, "{:?}", apa.warnings);
+        assert_eq!(apa.warnings.len(), 1, "{:?}", apa.warnings);
         let ieee = render(
             &references,
             &style_named(Some("ieee")).unwrap(),
@@ -861,6 +914,38 @@ mod tests {
         );
         assert!(notes[4].starts_with("van der Berg"), "{}", notes[4]);
         assert_eq!(texts("chicago-author-date")[0], "(see Doe and Roe 2020)");
+    }
+
+    #[test]
+    fn every_item_of_a_group_prints_its_prefix_and_suffix() {
+        let mut references = read_biblatex(BIB, true).references;
+        references.extend(read_csl_yaml(ISSUE_EXAMPLE).unwrap().references);
+        let mut group = cite(&["ERA5LandHourlyData2019", "doe2020"]);
+        group.items[0].prefix = "see".into();
+        group.items[0].suffix = "first note".into();
+        group.items[1].prefix = "also".into();
+        group.items[1].suffix = "p. 3, last note".into();
+        let cited = [group];
+        let printed = |style: &str| {
+            let out = render(
+                &references,
+                &style_named(Some(style)).unwrap(),
+                &LocaleCode::en_us(),
+                &cited,
+            );
+            assert!(out.warnings.is_empty(), "{:?}", out.warnings);
+            out.citations[0].clone().unwrap()
+        };
+        assert_eq!(
+            printed("apa"),
+            "(see Copernicus Climate Change Service, 2019, first note; \
+             also Doe &amp; Roe, 2020, p. 3, last note)"
+        );
+        assert_eq!(
+            printed("chicago-author-date"),
+            "(see Copernicus Climate Change Service 2019, first note; \
+             also Doe and Roe 2020, 3, last note)"
+        );
     }
 
     #[test]
