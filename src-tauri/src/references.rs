@@ -90,7 +90,7 @@ pub fn read_biblatex(text: &str, english_document: bool) -> Read {
     // A byte-order mark is no whitespace: left in, it hides the first entry
     // from the cut at every `@`.
     let text = text.trim_start_matches('\u{feff}');
-    let text = &join_command_arguments(&brace_quoted_values(text));
+    let text = &mark_following_arguments(&join_command_arguments(&brace_quoted_values(text)));
     if let Ok(entries) = biblatex_csl::entries(text) {
         let items = entries
             .iter()
@@ -239,6 +239,69 @@ fn join_command_arguments(text: &str) -> String {
     }
     out.push_str(&text[copied..]);
     out
+}
+
+/// The text with each group that directly follows a command's braced
+/// argument marked inside its braces, `\foo{a}{b}` as
+/// `\foo{a}{<ARGUMENT_START>b<ARGUMENT_END>}`, so unlatex knows the group.
+/// Line numbers stay.
+fn mark_following_arguments(text: &str) -> String {
+    let bytes = text.as_bytes();
+    let mut marks = Vec::new();
+    let mut at = 0;
+    while at < bytes.len() {
+        if bytes[at] != b'\\' {
+            at += 1;
+            continue;
+        }
+        let name = bytes[at + 1..]
+            .iter()
+            .take_while(|b| b.is_ascii_alphabetic());
+        let open = at + 1 + name.count();
+        // An escape `\x` skips the character after the backslash.
+        let command = open > at + 1;
+        at = open.max(at + 2);
+        if !command || bytes.get(open) != Some(&b'{') {
+            continue;
+        }
+        let mut close = group_end(bytes, open);
+        while let Some(end) = close.filter(|end| bytes.get(end + 1) == Some(&b'{')) {
+            close = group_end(bytes, end + 1);
+            if let Some(next_end) = close {
+                marks.push((end + 2, biblatex_csl::ARGUMENT_START));
+                marks.push((next_end, biblatex_csl::ARGUMENT_END));
+            }
+        }
+    }
+    // An empty group gets its start before its end: ARGUMENT_START sorts first.
+    marks.sort_unstable();
+    let mut out = String::with_capacity(text.len());
+    let mut copied = 0;
+    for (at, mark) in marks {
+        out.push_str(&text[copied..at]);
+        out.push(mark);
+        copied = at;
+    }
+    out.push_str(&text[copied..]);
+    out
+}
+
+/// The index of the `}` that closes the group whose `{` is at `open`; None
+/// when the text ends first. A backslash escapes the byte after it.
+fn group_end(bytes: &[u8], open: usize) -> Option<usize> {
+    let mut depth = 0usize;
+    let mut at = open + 1;
+    while at < bytes.len() {
+        match bytes[at] {
+            b'{' => depth += 1,
+            b'}' if depth == 0 => return Some(at),
+            b'}' => depth -= 1,
+            b'\\' => at += 1,
+            _ => {}
+        }
+        at += 1;
+    }
+    None
 }
 
 /// The length of a quoted value up to its closing `"`, the first outside
@@ -792,6 +855,18 @@ mod tests {
         let bib = "@misc{k, title={T}, note={A \\foo {bar} \\emph  {x} Gar\\c {c}on \\ldots {} \\o {} \\em\t{y} B}}";
         let read = read_biblatex(bib, true);
         let note = Value::String("A  x Garçon … ø y B".into());
+        assert_eq!(read.references[0].item.0.get("note"), Some(&note));
+    }
+
+    #[test]
+    fn a_group_right_after_a_command_argument_is_marked() {
+        let (start, end) = (biblatex_csl::ARGUMENT_START, biblatex_csl::ARGUMENT_END);
+        let marked = mark_following_arguments(r"\foo{a{b}}{c}{} \\x{d} \bar {e}");
+        let expected =
+            format!(r"\foo{{a{{b}}}}{{{start}c{end}}}{{{start}{end}}} \\x{{d}} \bar {{e}}");
+        assert_eq!(marked, expected);
+        let read = read_biblatex(r"@misc{k, title={T}, note={A \emph{a}{b} B}}", true);
+        let note = Value::String("A ab B".into());
         assert_eq!(read.references[0].item.0.get("note"), Some(&note));
     }
 

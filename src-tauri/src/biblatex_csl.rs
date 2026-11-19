@@ -152,6 +152,12 @@ const TEXT_COMMANDS: [(&str, bool); 39] = [
 /// Pandoc's LaTeX reader prints them.
 const SYMBOL_COMMANDS: [(&str, char); 3] = [("slash", '/'), ("hyphen", '-'), ("ldots", '\u{2026}')];
 
+/// The marks the `.bib` pre-pass puts inside the braces of a group that
+/// directly follows a command's argument, `\foo{a}{b}`, as the parser drops
+/// those braces. Private-use characters, which `.bib` text has no use for.
+pub const ARGUMENT_START: char = '\u{e000}';
+pub const ARGUMENT_END: char = '\u{e001}';
+
 /// The named HTML references for the characters markup reserves.
 const MARKUP_ENTITIES: [(&str, char); 5] = [
     ("amp", '&'),
@@ -1198,6 +1204,7 @@ fn unlatex(raw: &str) -> String {
                 closers.push("}");
             }
             '}' => out.push_str(closers.pop().unwrap_or("}")),
+            ARGUMENT_START | ARGUMENT_END => {}
             '&' => out.push(html_reference(&mut chars).unwrap_or(c)),
             _ => out.push(c),
         }
