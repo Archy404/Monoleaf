@@ -177,6 +177,12 @@ const TWO_ARGUMENT_COMMANDS: [(&str, bool, bool); 6] = [
 pub const ARGUMENT_START: char = '\u{e000}';
 pub const ARGUMENT_END: char = '\u{e001}';
 
+/// The marks the `.bib` pre-pass puts for `\textbackslash` and for the line
+/// break `\\`, both of which the parser turns into a lone `\`. Private-use
+/// characters, as the argument marks.
+pub const BACKSLASH: char = '\u{e002}';
+pub const LINE_BREAK: char = '\u{e003}';
+
 /// The named HTML references for the characters markup reserves.
 const MARKUP_ENTITIES: [(&str, char); 5] = [
     ("amp", '&'),
@@ -1139,7 +1145,9 @@ fn flush_word(word: &mut String, out: &mut String, sentence_start: &mut bool) {
 
 /// An identifier field as written: a URL or DOI keeps its "~" and "'".
 fn verbatim(entry: &Entry, field: &str) -> Option<String> {
-    let value = entry.get(field)?.format_verbatim().trim().to_string();
+    let value = entry.get(field)?.format_verbatim();
+    let value = value.replace(LINE_BREAK, "\\\\").replace(BACKSLASH, "\\");
+    let value = value.trim().to_string();
     (!value.is_empty()).then_some(value)
 }
 
@@ -1250,6 +1258,11 @@ fn unlatex(raw: &str) -> String {
             }
             '}' => out.push_str(closers.pop().unwrap_or("}")),
             ARGUMENT_START | ARGUMENT_END => {}
+            BACKSLASH => out.push('\\'),
+            LINE_BREAK => {
+                out.truncate(out.trim_end_matches(' ').len());
+                out.push('\n');
+            }
             '&' => out.push(html_reference(&mut chars).unwrap_or(c)),
             _ => out.push(c),
         }

@@ -90,7 +90,8 @@ pub fn read_biblatex(text: &str, english_document: bool) -> Read {
     // A byte-order mark is no whitespace: left in, it hides the first entry
     // from the cut at every `@`.
     let text = text.trim_start_matches('\u{feff}');
-    let text = &mark_following_arguments(&join_command_arguments(&brace_quoted_values(text)));
+    let text = &mark_backslashes(&brace_quoted_values(text));
+    let text = &mark_following_arguments(&join_command_arguments(text));
     if let Ok(entries) = biblatex_csl::entries(text) {
         let items = entries
             .iter()
@@ -204,6 +205,45 @@ fn brace_quoted_values(text: &str) -> String {
         }
         at += 1;
     }
+    out
+}
+
+/// The text with `\textbackslash` as BACKSLASH and the line break `\\` as
+/// LINE_BREAK, each with the spaces after it, as LaTeX reads them. The parser
+/// turns both into a lone `\` that makes the next word a command. Line
+/// numbers stay.
+fn mark_backslashes(text: &str) -> String {
+    let bytes = text.as_bytes();
+    let mut out = String::with_capacity(text.len());
+    let mut copied = 0;
+    let mut at = 0;
+    while at < bytes.len() {
+        if bytes[at] != b'\\' {
+            at += 1;
+            continue;
+        }
+        let name = bytes[at + 1..]
+            .iter()
+            .take_while(|b| b.is_ascii_alphabetic());
+        let name_end = at + 1 + name.count();
+        let (mark, end) = match &text[at + 1..name_end] {
+            "" if bytes.get(at + 1) == Some(&b'\\') => (biblatex_csl::LINE_BREAK, at + 2),
+            "textbackslash" => (biblatex_csl::BACKSLASH, name_end),
+            _ => {
+                // An escape `\x` skips the character after the backslash.
+                at = name_end.max(at + 2);
+                continue;
+            }
+        };
+        out.push_str(&text[copied..at]);
+        out.push(mark);
+        let spaces = bytes[end..]
+            .iter()
+            .take_while(|b| matches!(b, b' ' | b'\t'));
+        at = end + spaces.count();
+        copied = at;
+    }
+    out.push_str(&text[copied..]);
     out
 }
 
@@ -868,6 +908,19 @@ mod tests {
         let read = read_biblatex(r"@misc{k, title={T}, note={A \emph{a}{b} B}}", true);
         let note = Value::String("A ab B".into());
         assert_eq!(read.references[0].item.0.get("note"), Some(&note));
+    }
+
+    #[test]
+    fn a_backslash_command_and_a_line_break_print_as_pandoc_prints_them() {
+        let bib = r"@book{k, title={The \textbackslash Big Word}, url={http://x.org/a\\b},
+            note={The \textbackslash n escape, C:\textbackslash Users, C:\\Users, a \\ b}}";
+        let item = &read_biblatex(bib, true).references[0].item;
+        let field = |name: &str| item.0.get(name).cloned();
+        let text = |text: &str| Some(Value::String(text.into()));
+        assert_eq!(field("title"), text(r"The \big word"));
+        assert_eq!(field("URL"), text(r"http://x.org/a\\b"));
+        let note = "The \\n escape, C:\\Users, C:\nUsers, a\nb";
+        assert_eq!(field("note"), text(note));
     }
 
     #[test]
