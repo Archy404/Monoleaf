@@ -201,6 +201,10 @@ const HELD_CROSSREF: &str = "crossref#";
 /// comes later and wins, as in Pandoc.
 const HELD_XDATA: &str = "xdata#";
 
+/// The entry type as the `.bib` file writes it, in lower case, under a name no
+/// `.bib` field has: the crate reads `@www` and `@electronic` as `@online`.
+const RAW_TYPE: &str = "type#";
+
 /// How many `crossref` or `xdata` links in a row are followed: a part, its
 /// volume and the multi-volume set make two, eight leaves room and still ends
 /// a cycle.
@@ -222,7 +226,16 @@ pub fn entries(text: &str) -> Result<Vec<Entry>, ParseError> {
             pair.key.v = HELD_XDATA;
         }
     }
+    let raw_types: Vec<String> = raw
+        .entries
+        .iter()
+        .map(|entry| entry.v.kind.v.to_ascii_lowercase())
+        .collect();
     let mut entries = Bibliography::from_raw(raw)?.into_vec();
+    for (entry, raw_type) in entries.iter_mut().zip(raw_types) {
+        let value = vec![Spanned::detached(Chunk::Verbatim(raw_type))];
+        entry.fields.insert(RAW_TYPE.to_string(), value);
+    }
     let inherited: Vec<_> = entries
         .iter()
         .map(|entry| {
@@ -745,8 +758,10 @@ fn publishers(entry: &Entry, item: &mut Fields) {
 /// eprint on a known site gives the URL when the entry has none.
 fn identifiers(entry: &Entry, item: &mut Fields) {
     // The options `url=false` and `doi=false` leave the field out, though an
-    // online entry keeps its URL, as in BibLaTeX.
-    if entry.entry_type == EntryType::Online || !has_option(entry, "url", "false") {
+    // entry written as `@online` keeps its URL, as in Pandoc.
+    let online = verbatim(entry, RAW_TYPE)
+        .map_or(entry.entry_type == EntryType::Online, |raw| raw == "online");
+    if online || !has_option(entry, "url", "false") {
         item.set("URL", verbatim(entry, "url"));
     }
     if !item.has("URL") {
@@ -1874,5 +1889,20 @@ mod tests {
         assert_eq!(string(&part, "note"), Some("X2 note"));
         assert_eq!(string(&part, "edition"), Some("3"));
         assert_eq!(date(&part, "issued"), "[[1999]] ");
+    }
+
+    #[test]
+    fn only_an_entry_written_as_online_keeps_its_url_under_url_false() {
+        let entries = entries(
+            "@ONLINE{on, url={http://on}, options={url=false}} \
+             @www{www, url={http://www}, options={url=false}} \
+             @electronic{el, url={http://el}, options={url=false}}",
+        )
+        .unwrap();
+        let urls: Vec<bool> = entries
+            .iter()
+            .map(|entry| string(&item_of(entry, true), "URL").is_some())
+            .collect();
+        assert_eq!(urls, [true, false, false]);
     }
 }
