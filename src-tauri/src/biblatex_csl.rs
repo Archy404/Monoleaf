@@ -1211,6 +1211,9 @@ fn unlatex(raw: &str) -> String {
                     }
                     None if chars.next_if_eq(&'{').is_some() => {
                         argument(&mut chars, '{', '}');
+                        while chars.next_if_eq(&ARGUMENT_START).is_some() {
+                            argument(&mut chars, ARGUMENT_START, ARGUMENT_END);
+                        }
                     }
                     _ => {
                         if let Some((_, symbol)) =
@@ -1589,6 +1592,14 @@ mod tests {
         let entry = &crate::references::read_biblatex(bib, true).references[0].item;
         assert_eq!(string(entry, "title"), Some("The big one now"));
         assert_eq!(string(entry, "note"), Some("x y z x x x “x” “x”"));
+    }
+
+    #[test]
+    fn an_unknown_command_drops_every_group_right_after_it() {
+        let bib = r"@misc{k, title={T},
+            note={A \foo{a}{b} \foo{a}{b}{c} \foo{a} {b} \foo{a}{\bar{x}{y}} \emph{a}{b} B}}";
+        let entry = &crate::references::read_biblatex(bib, true).references[0].item;
+        assert_eq!(string(entry, "note"), Some("A    b  ab B"));
     }
 
     #[test]
