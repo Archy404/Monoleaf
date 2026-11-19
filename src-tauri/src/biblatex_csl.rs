@@ -402,12 +402,12 @@ fn genre(entry: &Entry) -> Option<String> {
     }
 }
 
-/// A BibLaTeX key's English text; any other value is its own text.
+/// A BibLaTeX key's English text; any other value, "PatentEU" too, is its
+/// own text.
 fn key_text(value: &str) -> String {
-    let key = value.to_ascii_lowercase();
     KEY_TEXTS
         .iter()
-        .find(|(name, _)| *name == key)
+        .find(|(name, _)| *name == value)
         .map_or_else(|| value.to_string(), |(_, text)| text.to_string())
 }
 
@@ -1670,6 +1670,18 @@ mod tests {
         assert_eq!(string(&book, "title"), Some("The title: New series"));
         assert_eq!(string(&book, "note"), Some("In United Kingdom"));
         assert_eq!(string(&book, "publisher-place"), Some("countryfr"));
+    }
+
+    #[test]
+    fn a_localisation_key_matches_only_in_lower_case() {
+        let patent = item(
+            r"@patent{p, title={T}, type={PatentEU}, location={countryDE and countryde},
+              pubstate={InPress}, note={\bibstring{InPress}}}",
+        );
+        assert_eq!(string(&patent, "genre"), Some("PatentEU"));
+        assert_eq!(string(&patent, "jurisdiction"), Some("countryDE; Germany"));
+        assert_eq!(string(&patent, "status"), Some("InPress"));
+        assert_eq!(string(&patent, "note"), Some("InPress"));
     }
 
     #[test]
