@@ -143,10 +143,6 @@ const LOCATOR_KINDS: [Locator; 29] = [
     Locator::Volume,
 ];
 
-/// What a locale calls each locator kind, "p.", "pp.", "page", "pages" for
-/// a page: the terms pandoc reads a locator by. The document's locale first,
-/// then English, so "S. 3" and "p. 3" both work in a German document. The
-/// longest term comes first, so "pp." is tried before "p.".
 /// hayagriva's bundled locales, parsed once: parsing them costs a tenth of a
 /// second, and every export and live-view render would pay it again.
 fn bundled_locales() -> &'static [Locale] {
@@ -154,23 +150,34 @@ fn bundled_locales() -> &'static [Locale] {
     LOCALES.get_or_init(locales)
 }
 
+/// What the document's locale calls each locator kind, "p.", "pp.", "page",
+/// "pages" for a page in English, "S." in German: the terms pandoc reads a
+/// locator by. A term the locale lacks comes from its base language's locale,
+/// then from English, as hayagriva looks terms up. The longest term comes
+/// first, so "pp." is tried before "p.".
 fn locator_terms(locales: &[Locale], code: &LocaleCode) -> Vec<(String, Locator)> {
+    let lookup: Vec<&Locale> = [
+        Some(code.clone()),
+        code.fallback(),
+        Some(LocaleCode::en_us()),
+    ]
+    .into_iter()
+    .flatten()
+    .filter_map(|lang| locales.iter().find(|l| l.lang.as_ref() == Some(&lang)))
+    .collect();
     let mut terms = Vec::new();
-    for lang in [code, &LocaleCode::en_us()] {
-        let found = locales.iter().find(|l| l.lang.as_ref() == Some(lang));
-        let Some(locale) = found else {
-            continue;
-        };
-        for kind in LOCATOR_KINDS {
-            for form in [TermForm::Long, TermForm::Short] {
-                let Some(term) = locale.term(Term::Locator(kind), form) else {
-                    continue;
-                };
-                for text in [term.single(), term.multiple()].into_iter().flatten() {
-                    let text = text.trim_end_matches('.');
-                    if !text.is_empty() {
-                        terms.push((text.to_string(), kind));
-                    }
+    for kind in LOCATOR_KINDS {
+        for form in [TermForm::Long, TermForm::Short] {
+            let found = lookup
+                .iter()
+                .find_map(|l| l.term(Term::Locator(kind), form));
+            let Some(term) = found else {
+                continue;
+            };
+            for text in [term.single(), term.multiple()].into_iter().flatten() {
+                let text = text.trim_end_matches('.');
+                if !text.is_empty() {
+                    terms.push((text.to_string(), kind));
                 }
             }
         }
@@ -989,11 +996,11 @@ mod tests {
     }
 
     #[test]
-    fn locator_terms_come_from_the_locale_and_english() {
+    fn locator_terms_come_from_the_document_locale() {
         let references = read_biblatex(BIB, true).references;
         let texts = [
             "pp. 3-5, emphasis added",
-            "Kap 2",
+            "Kap. 2",
             "S. 7",
             "page 9, see",
             "nothing numeric",
@@ -1010,7 +1017,7 @@ mod tests {
         let out = render(
             &references,
             &style,
-            &locale_named(Some("de-DE"), &style),
+            &locale_named(Some("de"), &style),
             &cited,
         );
         let texts: Vec<_> = out
@@ -1021,12 +1028,19 @@ mod tests {
         assert_eq!(
             texts,
             [
-                "(Doe &amp; Roe, 2020, S. 3\u{2013}5, emphasis added)",
+                "(Doe &amp; Roe, 2020, pp. 3-5, emphasis added)",
                 "(Doe &amp; Roe, 2020, Kapitel 2)",
                 "(Doe &amp; Roe, 2020, S. 7)",
-                "(Doe &amp; Roe, 2020, S. 9, see)",
+                "(Doe &amp; Roe, 2020, page 9, see)",
                 "(Doe &amp; Roe, 2020, nothing numeric)"
             ]
+        );
+        let style = style_named(Some("gb-7714-2015-note")).unwrap();
+        let out = render(&references, &style, &locale_named(None, &style), &cited);
+        let note = out.citations[0].as_deref().unwrap();
+        assert!(
+            note.ends_with("2020, 3: 1-9, pp. 3-5, emphasis added."),
+            "{note}"
         );
     }
 
