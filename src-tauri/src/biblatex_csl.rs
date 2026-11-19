@@ -152,6 +152,18 @@ const TEXT_COMMANDS: [(&str, bool); 39] = [
 /// Pandoc's LaTeX reader prints them.
 const SYMBOL_COMMANDS: [(&str, char); 3] = [("slash", '/'), ("hyphen", '-'), ("ldots", '\u{2026}')];
 
+/// The LaTeX commands with two arguments of which Pandoc's LaTeX reader
+/// prints one: whether it is the second, and whether Pandoc sets it in
+/// quotation marks.
+const TWO_ARGUMENT_COMMANDS: [(&str, bool, bool); 6] = [
+    ("href", true, false),
+    ("textcolor", true, false),
+    ("foreignlanguage", true, false),
+    ("texorpdfstring", false, false),
+    ("foreignquote", true, true),
+    ("hyphenquote", true, true),
+];
+
 /// The marks the `.bib` pre-pass puts inside the braces of a group that
 /// directly follows a command's argument, `\foo{a}{b}`, as the parser drops
 /// those braces. Private-use characters, which `.bib` text has no use for.
@@ -1183,12 +1195,23 @@ fn unlatex(raw: &str) -> String {
             }
             '\\' if chars.peek().is_some_and(char::is_ascii_alphabetic) => {
                 let name = command_name(&mut chars);
+                let two = TWO_ARGUMENT_COMMANDS
+                    .iter()
+                    .find(|(command, ..)| *command == name);
+                if let Some(&(_, second, quoted)) = two {
+                    if chars.next_if_eq(&'{').is_some() {
+                        out.push_str(&kept_argument(&mut chars, second, quoted));
+                        continue;
+                    }
+                }
                 match TEXT_COMMANDS.iter().find(|(command, _)| *command == name) {
                     Some((_, quoted)) if chars.next_if_eq(&'{').is_some() => {
                         out.push_str(if *quoted { "\u{201c}" } else { "" });
                         closers.push(if *quoted { "\u{201d}" } else { "" });
                     }
-                    None if chars.next_if_eq(&'{').is_some() => skip_argument(&mut chars),
+                    None if chars.next_if_eq(&'{').is_some() => {
+                        argument(&mut chars, '{', '}');
+                    }
                     _ => {
                         if let Some((_, symbol)) =
                             SYMBOL_COMMANDS.iter().find(|(command, _)| *command == name)
@@ -1217,20 +1240,46 @@ fn command_name(chars: &mut std::iter::Peekable<std::str::Chars>) -> String {
     std::iter::from_fn(|| chars.next_if(|c| c.is_ascii_alphabetic() || *c == '*')).collect()
 }
 
-/// Consumes a braced argument after its "{", up to the "}" that closes it.
-fn skip_argument(chars: &mut std::iter::Peekable<std::str::Chars>) {
+/// The text a two-argument command prints, its "{" consumed: the first
+/// argument or the marked second one, in quotation marks when asked.
+fn kept_argument(
+    chars: &mut std::iter::Peekable<std::str::Chars>,
+    second: bool,
+    quoted: bool,
+) -> String {
+    let first = argument(chars, '{', '}');
+    let following = match chars.next_if_eq(&ARGUMENT_START) {
+        Some(_) => argument(chars, ARGUMENT_START, ARGUMENT_END),
+        None => String::new(),
+    };
+    let kept = unlatex(if second { &following } else { &first });
+    if quoted {
+        format!("\u{201c}{kept}\u{201d}")
+    } else {
+        kept
+    }
+}
+
+/// Consumes an argument after its opening character, up to the closing one,
+/// and returns its text.
+fn argument(chars: &mut std::iter::Peekable<std::str::Chars>, open: char, close: char) -> String {
+    let mut text = String::new();
     let mut depth = 0;
     while let Some(c) = chars.next() {
         match c {
             '\\' => {
-                chars.next();
+                text.push(c);
+                text.extend(chars.next());
+                continue;
             }
-            '{' => depth += 1,
-            '}' if depth == 0 => return,
-            '}' => depth -= 1,
+            c if c == open => depth += 1,
+            c if c == close && depth == 0 => break,
+            c if c == close => depth -= 1,
             _ => {}
         }
+        text.push(c);
     }
+    text
 }
 
 /// The character of the HTML reference after a "&": "#233;", "#xE9;" or
@@ -1530,6 +1579,16 @@ mod tests {
         assert_eq!(string(&entry, "note"), Some("A B C D EF"));
         let entry = item(r"@misc{k, title={T}, note={\em text \it B \bf C \sc D}}");
         assert_eq!(string(&entry, "note"), Some("text B C D"));
+    }
+
+    #[test]
+    fn a_two_argument_command_prints_the_argument_pandoc_prints() {
+        let bib = r"@book{k, title={The \texorpdfstring{Big One}{Big Two} Now},
+            note={\href{u}{x \emph{y} z} \textcolor{red}{x} \foreignlanguage{german}{x}
+            \texorpdfstring{x}{y} \foreignquote{english}{x} \hyphenquote{english}{x}}}";
+        let entry = &crate::references::read_biblatex(bib, true).references[0].item;
+        assert_eq!(string(entry, "title"), Some("The big one now"));
+        assert_eq!(string(entry, "note"), Some("x y z x x x “x” “x”"));
     }
 
     #[test]
