@@ -352,11 +352,9 @@ fn without_full_stop(html: &str) -> String {
     html.to_string()
 }
 
-/// Every prefix goes in front of its item, every suffix after it, wherever
-/// hayagriva has sorted the item to; hayagriva marks each item it prints with
-/// the item's index. False when an item with an affix was collapsed away, so
-/// its affix has no place.
-fn place_affixes(children: &mut ElemChildren, citation: &Citation, suffixes: &[&str]) -> bool {
+/// Every prefix goes in front of its item, every suffix after it; hayagriva
+/// marks each item it prints with the item's index.
+fn place_affixes(children: &mut ElemChildren, citation: &Citation, suffixes: &[&str]) {
     let text = |text: String| {
         ElemChild::Text(Formatted {
             text,
@@ -393,9 +391,6 @@ fn place_affixes(children: &mut ElemChildren, citation: &Citation, suffixes: &[&
         out.extend(suffix.take());
     }
     children.0 = out;
-    affixes
-        .iter()
-        .all(|(prefix, suffix)| prefix.is_none() && suffix.is_none())
 }
 
 /// hayagriva's prose form "Doe (2020)". Pandoc prints the in-text form of a
@@ -545,9 +540,25 @@ pub fn render(
     if cited.is_empty() {
         return out;
     }
+    // Pandoc keeps each item with a prefix or suffix where it is written and
+    // collapses nothing across it; hayagriva can turn sorting and collapsing
+    // off only for a whole citation.
+    let mut written_order = style.clone();
+    written_order.citation.sort = None;
+    written_order.citation.collapse = None;
+    written_order.citation.cite_group_delimiter = None;
     let mut driver = BibliographyDriver::new();
     for (index, items) in &cited {
         let citation = &citations[*index];
+        let affixed = citation
+            .items
+            .iter()
+            .zip(&suffixes[*index])
+            .any(|(item, suffix)| !item.prefix.trim().is_empty() || !suffix.trim().is_empty());
+        let request_style = match affixed {
+            true => &written_order,
+            false => style,
+        };
         let items = items
             .iter()
             .map(|(reference, cited)| {
@@ -559,7 +570,8 @@ pub fn render(
                 }
             })
             .collect();
-        let request = CitationRequest::new(items, style, Some(locale.clone()), locales, None);
+        let request =
+            CitationRequest::new(items, request_style, Some(locale.clone()), locales, None);
         driver.citation(request);
     }
     let request = BibliographyRequest::new(style, Some(locale.clone()), locales);
@@ -575,17 +587,12 @@ pub fn render(
         return out;
     };
     for ((index, _), mut citation) in cited.iter().zip(rendered.citations) {
-        let placed = is_prose(&citations[*index], style)
-            || place_affixes(
+        if !is_prose(&citations[*index], style) {
+            place_affixes(
                 &mut citation.citation,
                 &citations[*index],
                 &suffixes[*index],
             );
-        if !placed {
-            out.warnings.push(format!(
-                "citation {}: a prefix or suffix inside a collapsed group is not printed",
-                index + 1
-            ));
         }
         let text = html(&citation.citation);
         let citation = &citations[*index];
@@ -997,16 +1004,21 @@ mod tests {
     }
 
     #[test]
-    fn a_prefix_and_a_suffix_stay_with_their_item_when_hayagriva_sorts() {
+    fn a_group_with_a_prefix_or_suffix_prints_in_the_order_written() {
         let mut references = read_biblatex(BIB, true).references;
         references.extend(read_csl_yaml(ISSUE_EXAMPLE).unwrap().references);
+        let berg = "references:\n- id: berg\n  title: Names\n  author:\n  - family: Berg\n";
+        references.extend(read_csl_yaml(berg).unwrap().references);
         let mut group = cite(&["doe2020", "ERA5LandHourlyData2019"]);
         group.items[0].prefix = "see".into();
         group.items[0].suffix = "first note".into();
         group.items[1].prefix = "also".into();
         let mut see = cite(&["doe2020"]);
         see.items[0].prefix = "see".into();
-        let cited = [group, see];
+        let range = cite(&["doe2020", "ERA5LandHourlyData2019", "berg"]);
+        let mut see_first = cite(&["berg", "doe2020", "ERA5LandHourlyData2019"]);
+        see_first.items[0].prefix = "see".into();
+        let cited = [group, see, range, see_first];
         let printed = |style: &str| {
             let style = style_named(Some(style)).unwrap();
             render(&references, &style, &LocaleCode::en_us(), &cited).citations
@@ -1014,9 +1026,14 @@ mod tests {
         assert_eq!(
             printed("apa")[0].as_deref(),
             Some(
-                "(also Copernicus Climate Change Service, 2019; \
-                 see Doe &amp; Roe, 2020, first note)"
+                "(see Doe &amp; Roe, 2020, first note; \
+                 also Copernicus Climate Change Service, 2019)"
             )
+        );
+        let vancouver = printed("elsevier-vancouver");
+        assert_eq!(
+            vancouver[2..],
+            [Some("[1–3]".into()), Some("[see 3,1,2]".into())]
         );
         // The bracket is part of the layout, superscript with the number.
         let sup = |text| format!("<span style=\"vertical-align: super;\">{text}</span>");
