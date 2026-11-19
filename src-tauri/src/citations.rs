@@ -233,11 +233,10 @@ fn is_numeric(style: &IndependentStyle) -> bool {
     style.info.category.iter().any(numeric)
 }
 
+/// A style whose citations are footnotes, by the CSL `class` attribute, the
+/// same test pandoc's citeproc applies.
 fn is_note(style: &IndependentStyle) -> bool {
-    let note = StyleCategory::CitationFormat {
-        format: CitationFormat::Note,
-    };
-    style.info.category.contains(&note)
+    style.settings.class == StyleClass::Note
 }
 
 /// What pandoc steps over to reach the letter it capitalises: opening
@@ -301,7 +300,7 @@ fn decorate(
     // A note style has no bracket; hayagriva opens the prose form with "("
     // all the same and ends it with the note's full stop.
     let prose = citation.in_text || suppresses_author(citation, style);
-    if prose && style.settings.class == StyleClass::Note {
+    if prose && is_note(style) {
         if let Some(at) = html.find(bracket) {
             html.replace_range(at..at + bracket.len(), "");
         }
@@ -321,17 +320,6 @@ fn decorate(
         capitalise_first(&mut html);
     }
     html
-}
-
-fn is_note(style: &IndependentStyle) -> bool {
-    style.info.category.iter().any(|category| {
-        matches!(
-            category,
-            StyleCategory::CitationFormat {
-                format: CitationFormat::Note
-            }
-        )
-    })
 }
 
 /// Pandoc's form of a citation inside a footnote in a note style: in
