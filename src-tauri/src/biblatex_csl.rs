@@ -800,15 +800,19 @@ fn names(entry: &Entry, item: &mut Fields) {
 }
 
 /// Whether the entry's `options` field, a comma-separated list, gives the
-/// option the value; `useprefix` alone is `useprefix=true`.
+/// option the value; `useprefix` alone is `useprefix=true`. An option given
+/// twice takes its first value, as Pandoc reads it.
 fn has_option(entry: &Entry, option: &str, wanted: &str) -> bool {
     text(entry, "options").is_some_and(|options| {
-        options.split(',').any(|setting| {
-            let mut parts = setting.splitn(2, '=');
-            let key = parts.next().unwrap_or_default().trim();
-            let value = parts.next().map_or("true", str::trim);
-            key.eq_ignore_ascii_case(option) && value.eq_ignore_ascii_case(wanted)
-        })
+        options
+            .split(',')
+            .find_map(|setting| {
+                let mut parts = setting.splitn(2, '=');
+                let key = parts.next().unwrap_or_default().trim();
+                let value = parts.next().map_or("true", str::trim);
+                key.eq_ignore_ascii_case(option).then_some(value)
+            })
+            .is_some_and(|value| value.eq_ignore_ascii_case(wanted))
     })
 }
 
@@ -1546,6 +1550,20 @@ mod tests {
         assert_eq!(names(&on, "author"), ["Dijk|Dirk|van||"]);
         let off = item("@misc{k, title={T}, author={van Dijk, Dirk}, options={useprefix=false}}");
         assert_eq!(names(&off, "author"), ["Dijk|Dirk||van|"]);
+    }
+
+    #[test]
+    fn an_option_given_twice_takes_its_first_value() {
+        let fields = "title={T}, url={http://u}, doi={1/2}, author={van Dijk, Dirk}";
+        let first_on = item(&format!(
+            "@article{{k, {fields}, options={{doi=true, doi=false, useprefix, useprefix=false}}}}"
+        ));
+        assert_eq!(string(&first_on, "DOI"), Some("1/2"));
+        assert_eq!(names(&first_on, "author"), ["Dijk|Dirk|van||"]);
+        let first_off = item(&format!(
+            "@article{{k, {fields}, options={{url=false, url=true}}}}"
+        ));
+        assert_eq!(string(&first_off, "URL"), None);
     }
 
     #[test]
