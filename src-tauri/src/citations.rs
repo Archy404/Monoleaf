@@ -229,6 +229,40 @@ fn is_numeric(style: &IndependentStyle) -> bool {
     style.info.category.iter().any(numeric)
 }
 
+fn is_note(style: &IndependentStyle) -> bool {
+    let note = StyleCategory::CitationFormat {
+        format: CitationFormat::Note,
+    };
+    style.info.category.contains(&note)
+}
+
+/// What pandoc steps over to reach the letter it capitalises: opening
+/// quotation marks, the straight one as escape_html() writes it, a bracket.
+const BEFORE_FIRST_LETTER: [&str; 9] = ["&quot;", "'", "“", "‘", "„", "‚", "«", "‹", "("];
+
+/// Pandoc capitalises the first letter of a note, past any tag and opening
+/// mark; a note that opens with a digit or a dash stays as it is.
+fn capitalise_first(html: &mut String) {
+    let mut at = 0;
+    loop {
+        let rest = &html[at..];
+        let skip = match rest.starts_with('<') {
+            true => rest.find('>').map(|end| end + 1),
+            false => BEFORE_FIRST_LETTER
+                .iter()
+                .find(|m| rest.starts_with(*m))
+                .map(|m| m.len()),
+        };
+        match skip {
+            Some(skip) => at += skip,
+            None => break,
+        }
+    }
+    if let Some(first) = html[at..].chars().next().filter(|c| c.is_lowercase()) {
+        html.replace_range(at..at + first.len_utf8(), &first.to_uppercase().to_string());
+    }
+}
+
 /// The bracket the style's layout opens a rendered citation with. A style
 /// that brackets each number inside the layout, as ieee does, has none.
 fn opening<'h>(html: &'h str, style: &IndependentStyle) -> Option<&'h str> {
@@ -277,6 +311,10 @@ fn decorate(
     if !suffix.is_empty() {
         let at = html.len() - closing(&html, style).map_or(0, str::len);
         html.insert_str(at, &format!(", {}", escape_html(suffix)));
+    }
+    // The in-text form of a note style prints its author in the sentence.
+    if is_note(style) && !citation.in_text {
+        capitalise_first(&mut html);
     }
     html
 }
@@ -746,6 +784,46 @@ mod tests {
                 "“A Study,” 3."
             ]
         );
+    }
+
+    #[test]
+    fn a_note_starts_with_a_capital_as_in_pandoc() {
+        let mut references = read_biblatex(BIB, true).references;
+        let berg = "references:\n- id: berg\n  title: Names\n  author:\n  - family: Berg\n    \
+                    given: Ludwig\n    non-dropping-particle: van der\n";
+        references.extend(read_csl_yaml(berg).unwrap().references);
+        let prefixed = |prefix: &str, key: &str| {
+            let mut citation = cite(&[key]);
+            citation.items[0].prefix = prefix.into();
+            citation
+        };
+        let mut prose = cite(&["berg"]);
+        prose.in_text = true;
+        let cited = [
+            prefixed("see", "doe2020"),
+            cite(&["berg"]),
+            prefixed("\"see\"", "doe2020"),
+            prefixed("2nd ed.", "doe2020"),
+            prose,
+        ];
+        let locale = LocaleCode::en_us();
+        let texts = |style: &str| {
+            let style = style_named(Some(style)).unwrap();
+            let out = render(&references, &style, &locale, &cited);
+            out.citations.into_iter().flatten().collect::<Vec<_>>()
+        };
+        let notes = texts("chicago-shortened-notes");
+        assert_eq!(
+            notes[..4],
+            [
+                "See Doe and Roe, “A Study”.",
+                "Van der Berg, <span style=\"font-style: italic;\">Names</span>.",
+                "&quot;See&quot; Doe and Roe, “A Study”.",
+                "2nd ed. Doe and Roe, “A Study”."
+            ]
+        );
+        assert!(notes[4].starts_with("van der Berg"), "{}", notes[4]);
+        assert_eq!(texts("chicago-author-date")[0], "(see Doe and Roe 2020)");
     }
 
     #[test]
