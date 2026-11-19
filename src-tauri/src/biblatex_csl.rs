@@ -919,11 +919,11 @@ fn titled(entry: &Entry, field: &str, sentence_case: bool) -> Option<String> {
 
 /// A title in sentence case, by the rule Pandoc applies: a word is lowered
 /// only when its first letter is its only capital, so "NASA", "McDonald" and
-/// "iPhone" stay; the first word, and the first after a ":", "?" or "!"
-/// that ends a word (not the one in "a:b" or "http://"), gets a capital
-/// unless it has one of its own, as "eBay"; a word with a digit, as "A2605",
-/// stays as written; a hyphen ends a word; what braces protect stays as
-/// written.
+/// "iPhone" stay; the first word, and the first after a ":", "?", "!" or "."
+/// that ends a word (not the one in "a:b", "http://" or "u.s"), gets a
+/// capital unless it has one of its own, as "eBay"; a word with a digit, as
+/// "A2605", stays as written; a hyphen ends a word; what braces protect stays
+/// as written.
 fn sentence_case_of(chunks: ChunksRef) -> String {
     let mut out = String::new();
     let mut sentence_start = true;
@@ -947,7 +947,7 @@ fn sentence_case_of(chunks: ChunksRef) -> String {
                     flush_word(&mut word, &mut out, &mut sentence_start);
                     out.push(c);
                     let ends_word = chars.peek().is_none_or(|next| next.is_whitespace());
-                    if matches!(c, ':' | '?' | '!') && ends_word {
+                    if matches!(c, ':' | '?' | '!' | '.') && ends_word {
                         sentence_start = true;
                     }
                 }
@@ -1540,6 +1540,13 @@ mod tests {
             ),
             ("eBay Markets", "eBay markets"),
             ("Why Cite? A Short Answer", "Why cite? A short answer"),
+            ("report. second part", "Report. Second part"),
+            ("the u.s. treasury report", "The u.s. Treasury report"),
+            ("Apples vs. the Oranges here", "Apples vs. The oranges here"),
+            (
+                "Report.second... (third) part",
+                "Report.second... (Third) part",
+            ),
             (
                 "Molecular cloning: a laboratory manual",
                 "Molecular cloning: A laboratory manual",
