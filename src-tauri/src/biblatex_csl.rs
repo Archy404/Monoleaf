@@ -811,8 +811,9 @@ fn titled(entry: &Entry, field: &str, sentence_case: bool) -> Option<String> {
 /// only when its first letter is its only capital, so "NASA", "McDonald" and
 /// "iPhone" stay; the first word, and the first after a ":", "?" or "!"
 /// that ends a word (not the one in "a:b" or "http://"), gets a capital
-/// unless it has one of its own, as "eBay"; a hyphen ends a word; what
-/// braces protect stays as written.
+/// unless it has one of its own, as "eBay"; a word with a digit, as "A2605",
+/// stays as written; a hyphen ends a word; what braces protect stays as
+/// written.
 fn sentence_case_of(chunks: ChunksRef) -> String {
     let mut out = String::new();
     let mut sentence_start = true;
@@ -859,19 +860,20 @@ fn sentence_case_of(chunks: ChunksRef) -> String {
 
 /// Appends the word in its sentence-case form and clears it: capitalised at
 /// a sentence start when it has no capital, lowered when its first letter is
-/// its only capital, otherwise as written.
+/// its only capital, otherwise as written; a word with a digit stays as
+/// written.
 fn flush_word(word: &mut String, out: &mut String, sentence_start: &mut bool) {
     if word.is_empty() {
         return;
     }
     let mut chars = word.chars();
     let first_is_capital = chars.next().is_some_and(char::is_uppercase);
-    let rest_has_capital = chars.any(char::is_uppercase);
-    if *sentence_start && !first_is_capital && !rest_has_capital {
+    let rest_keeps_case = chars.any(|c| c.is_uppercase() || c.is_numeric());
+    if *sentence_start && !first_is_capital && !rest_keeps_case {
         let mut chars = word.chars();
         out.extend(chars.next().into_iter().flat_map(char::to_uppercase));
         out.extend(chars);
-    } else if !*sentence_start && first_is_capital && !rest_has_capital {
+    } else if !*sentence_start && first_is_capital && !rest_keeps_case {
         out.push_str(&word.to_lowercase());
     } else {
         out.push_str(word);
@@ -1416,6 +1418,11 @@ mod tests {
                 "DNA repair and the NASA archive",
             ),
             ("COVID-19 and the Lab", "COVID-19 and the lab"),
+            ("Study of A2605 Cells", "Study of A2605 cells"),
+            ("a2605 study", "a2605 study"),
+            ("Study of Li–O2 Batteries", "Study of li–O2 batteries"),
+            ("Model T-1000 Fails", "Model t-1000 fails"),
+            ("CO2 Capture of R2d2 and A1b", "CO2 capture of R2d2 and A1b"),
             ("World War II Records", "World war II records"),
             (
                 "iPhone Apps and McDonald Stories",
