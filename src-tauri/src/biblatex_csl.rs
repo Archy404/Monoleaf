@@ -102,8 +102,9 @@ const EPRINT_SITES: [(&str, &str); 4] = [
 
 /// The LaTeX commands whose argument prints as its text, and whether Pandoc
 /// sets it in quotation marks. Pandoc sets the others in italics, bold, small
-/// caps, superscript or subscript, which item text cannot carry.
-const TEXT_COMMANDS: [(&str, bool); 16] = [
+/// caps, superscript or subscript, which item text cannot carry. The argument
+/// of `uppercase` and `lowercase` keeps its case, which Pandoc changes.
+const TEXT_COMMANDS: [(&str, bool); 28] = [
     ("emph", false),
     ("textit", false),
     ("textbf", false),
@@ -117,6 +118,18 @@ const TEXT_COMMANDS: [(&str, bool); 16] = [
     ("mkbibitalic", false),
     ("mkbibbold", false),
     ("url", false),
+    ("textsl", false),
+    ("texttt", false),
+    ("textsf", false),
+    ("textmd", false),
+    ("underline", false),
+    ("sout", false),
+    ("nolinkurl", false),
+    ("autocap", false),
+    ("NoCaseChange", false),
+    ("uppercase", false),
+    ("MakeUppercase", false),
+    ("lowercase", false),
     ("mkbibquote", true),
     ("enquote", true),
     ("enquote*", true),
@@ -1072,8 +1085,9 @@ fn plain(chunks: ChunksRef) -> String {
 
 /// Text with TeX's conventions resolved: "--" an en dash, "---" an em dash,
 /// "~" a no-break space, an escaped character the character itself, quotes
-/// and apostrophes the typographic ones, a text command its argument, an
-/// HTML reference its character.
+/// and apostrophes the typographic ones, a text command its argument, any
+/// other command with a braced argument nothing, an HTML reference its
+/// character.
 fn unlatex(raw: &str) -> String {
     let mut out = String::with_capacity(raw.len());
     let mut chars = raw.chars().peekable();
@@ -1109,6 +1123,7 @@ fn unlatex(raw: &str) -> String {
                         out.push_str(if *quoted { "\u{201c}" } else { "" });
                         closers.push(if *quoted { "\u{201d}" } else { "" });
                     }
+                    None if chars.next_if_eq(&'{').is_some() => skip_argument(&mut chars),
                     _ => {
                         out.push(c);
                         out.push_str(&name);
@@ -1130,6 +1145,22 @@ fn unlatex(raw: &str) -> String {
 /// The name of the LaTeX command after a "\", with the "*" of a starred form.
 fn command_name(chars: &mut std::iter::Peekable<std::str::Chars>) -> String {
     std::iter::from_fn(|| chars.next_if(|c| c.is_ascii_alphabetic() || *c == '*')).collect()
+}
+
+/// Consumes a braced argument after its "{", up to the "}" that closes it.
+fn skip_argument(chars: &mut std::iter::Peekable<std::str::Chars>) {
+    let mut depth = 0;
+    while let Some(c) = chars.next() {
+        match c {
+            '\\' => {
+                chars.next();
+            }
+            '{' => depth += 1,
+            '}' if depth == 0 => return,
+            '}' => depth -= 1,
+            _ => {}
+        }
+    }
 }
 
 /// The character of the HTML reference after a "&": "#233;", "#xE9;" or
@@ -1405,7 +1436,7 @@ mod tests {
             ("\\emph{De Anima} \\textsc{mcxcviii}", "De Anima mcxcviii"),
             ("\\textit{I} \\textbf{B} \\url{x.org}", "I B x.org"),
             ("\\mkbibquote{De} \\enquote*{A--B}", "“De” “A–B”"),
-            ("\\emph{A \\foo{x} \\enquote{B}} C", "A \\foo{x} “B” C"),
+            ("\\emph{A \\foo{x} \\enquote{B}} C", "A  “B” C"),
         ];
         for (title, expected) in cases {
             let entry = item(&format!("@book{{k, title={{{title}}}, langid={{german}}}}"));
@@ -1413,6 +1444,13 @@ mod tests {
         }
         let english = item("@book{k, title={\\emph{the Title} Rest}}");
         assert_eq!(string(&english, "title"), Some("The title rest"));
+    }
+
+    #[test]
+    fn an_unknown_command_with_an_argument_prints_nothing() {
+        let entry =
+            item(r"@misc{k, title={T}, note={A \foo{a{b}c} \href{u}{x} \textsl{y} \sout{z} B}}");
+        assert_eq!(string(&entry, "note"), Some("A  x y z B"));
     }
 
     #[test]
