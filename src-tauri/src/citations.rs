@@ -287,9 +287,10 @@ fn closing<'h>(html: &'h str, style: &IndependentStyle) -> Option<&'h str> {
 }
 
 /// Pandoc's extras hayagriva has no item for. A suppressed author cuts the
-/// prose form "Doe (2020, p. 3)" at its bracket; the first item's prefix goes
-/// in after the layout's opening bracket, the last item's suffix before its
-/// closing one; without them, "see [1]" and "[1], emphasis added".
+/// prose form "Doe (2020, p. 3)" at its bracket. hayagriva writes the prose
+/// form's bracket inside the item, at a depth that differs by style, so its
+/// one prefix goes in after the bracket of the text and its suffix before the
+/// closing one.
 fn decorate(
     mut html: String,
     citation: &Citation,
@@ -307,18 +308,19 @@ fn decorate(
     }
     // A note style has no bracket; hayagriva opens the prose form with "("
     // all the same and ends it with the note's full stop.
+    let prose = is_prose(citation, style);
     if suppresses_author(citation, style) && is_note(style) {
         if let Some(at) = html.find(bracket) {
             html.replace_range(at..at + bracket.len(), "");
         }
     }
     let prefix = first.prefix.trim();
-    if !prefix.is_empty() {
+    if prose && !prefix.is_empty() {
         let at = opening(&html, style).map_or(0, str::len);
         html.insert_str(at, &format!("{} ", escape_html(prefix)));
     }
     let suffix = suffix.trim();
-    if !suffix.is_empty() {
+    if prose && !suffix.is_empty() {
         let at = html.len() - closing(&html, style).map_or(0, str::len);
         html.insert_str(at, &format!(", {}", escape_html(suffix)));
     }
@@ -350,16 +352,11 @@ fn without_full_stop(html: &str) -> String {
     html.to_string()
 }
 
-/// The affixes decorate() cannot reach: every prefix but the first item's goes
-/// in front of its item, every suffix but the last item's after it. hayagriva
-/// marks each item it prints with the item's index. False when an item with
-/// such an affix was collapsed away, so its affix has no place.
-fn place_inner_affixes(
-    children: &mut ElemChildren,
-    citation: &Citation,
-    suffixes: &[&str],
-) -> bool {
-    let last = citation.items.len().saturating_sub(1);
+/// Every prefix goes in front of its item, every suffix after it, wherever
+/// hayagriva has sorted the item to; hayagriva marks each item it prints with
+/// the item's index. False when an item with an affix was collapsed away, so
+/// its affix has no place.
+fn place_affixes(children: &mut ElemChildren, citation: &Citation, suffixes: &[&str]) -> bool {
     let text = |text: String| {
         ElemChild::Text(Formatted {
             text,
@@ -370,12 +367,11 @@ fn place_inner_affixes(
         .items
         .iter()
         .zip(suffixes)
-        .enumerate()
-        .map(|(i, (item, suffix))| {
+        .map(|(item, suffix)| {
             let (prefix, suffix) = (item.prefix.trim(), suffix.trim());
             (
-                (i > 0 && !prefix.is_empty()).then(|| text(format!("{prefix} "))),
-                (i < last && !suffix.is_empty()).then(|| text(format!(", {suffix}"))),
+                (!prefix.is_empty()).then(|| text(format!("{prefix} "))),
+                (!suffix.is_empty()).then(|| text(format!(", {suffix}"))),
             )
         })
         .collect();
@@ -400,6 +396,13 @@ fn place_inner_affixes(
     affixes
         .iter()
         .all(|(prefix, suffix)| prefix.is_none() && suffix.is_none())
+}
+
+/// hayagriva's prose form "Doe (2020)". Pandoc prints the in-text form of a
+/// numeric style as the bare number, that of a note style as the note.
+fn is_prose(citation: &Citation, style: &IndependentStyle) -> bool {
+    (citation.in_text && !is_numeric(style) && !is_note(style))
+        || suppresses_author(citation, style)
 }
 
 /// Only a citation of one work drops its author; numeric styles never do.
@@ -545,16 +548,12 @@ pub fn render(
     let mut driver = BibliographyDriver::new();
     for (index, items) in &cited {
         let citation = &citations[*index];
-        // Pandoc prints the in-text form of a numeric style as the bare number,
-        // that of a note style as the note.
-        let prose = (citation.in_text && !is_numeric(style) && !is_note(style))
-            || suppresses_author(citation, style);
         let items = items
             .iter()
             .map(|(reference, cited)| {
                 let locator = split_locator(&cited.suffix, &terms).0;
                 let item = CitationItem::with_locator(*reference, locator);
-                match prose {
+                match is_prose(citation, style) {
                     true => item.kind(CitePurpose::Prose),
                     false => item,
                 }
@@ -576,11 +575,13 @@ pub fn render(
         return out;
     };
     for ((index, _), mut citation) in cited.iter().zip(rendered.citations) {
-        if !place_inner_affixes(
-            &mut citation.citation,
-            &citations[*index],
-            &suffixes[*index],
-        ) {
+        let placed = is_prose(&citations[*index], style)
+            || place_affixes(
+                &mut citation.citation,
+                &citations[*index],
+                &suffixes[*index],
+            );
+        if !placed {
             out.warnings.push(format!(
                 "citation {}: a prefix or suffix inside a collapsed group is not printed",
                 index + 1
@@ -992,6 +993,36 @@ mod tests {
             printed("chicago-author-date"),
             "(see Copernicus Climate Change Service 2019, first note; \
              also Doe and Roe 2020, 3, last note)"
+        );
+    }
+
+    #[test]
+    fn a_prefix_and_a_suffix_stay_with_their_item_when_hayagriva_sorts() {
+        let mut references = read_biblatex(BIB, true).references;
+        references.extend(read_csl_yaml(ISSUE_EXAMPLE).unwrap().references);
+        let mut group = cite(&["doe2020", "ERA5LandHourlyData2019"]);
+        group.items[0].prefix = "see".into();
+        group.items[0].suffix = "first note".into();
+        group.items[1].prefix = "also".into();
+        let mut see = cite(&["doe2020"]);
+        see.items[0].prefix = "see".into();
+        let cited = [group, see];
+        let printed = |style: &str| {
+            let style = style_named(Some(style)).unwrap();
+            render(&references, &style, &LocaleCode::en_us(), &cited).citations
+        };
+        assert_eq!(
+            printed("apa")[0].as_deref(),
+            Some(
+                "(also Copernicus Climate Change Service, 2019; \
+                 see Doe &amp; Roe, 2020, first note)"
+            )
+        );
+        // The bracket is part of the layout, superscript with the number.
+        let sup = |text| format!("<span style=\"vertical-align: super;\">{text}</span>");
+        assert_eq!(
+            printed("angewandte-chemie")[1],
+            Some(format!("{}see {}{}", sup("["), sup("1"), sup("]")))
         );
     }
 
