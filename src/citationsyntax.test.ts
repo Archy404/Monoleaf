@@ -98,10 +98,20 @@ describe("findCitations", () => {
   });
 
   it("reads the keys of a bracket that is no citation list as in-text", () => {
-    const found = findCitations("[@doe2020; not a key]");
-    expect(found.map((c) => [c.inText, c.items[0].key])).toEqual([
-      [true, "doe2020"],
+    // pandoc 3.13 reads such a bracket as text with author-in-text citations
+    const at = (from: number, to: number, key: string) => ({
+      from,
+      to,
+      items: [item(key)],
+      inText: true,
+    });
+    expect(findCitations("[@a; foo]")).toEqual([at(1, 3, "a")]);
+    expect(findCitations("[foo; @a]")).toEqual([at(6, 8, "a")]);
+    expect(findCitations("[@a; @b; foo]")).toEqual([
+      at(1, 3, "a"),
+      at(5, 7, "b"),
     ]);
+    expect(findCitations("[@a, p. 3; see also]")).toEqual([at(1, 3, "a")]);
   });
 });
 
