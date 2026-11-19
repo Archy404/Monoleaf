@@ -111,10 +111,11 @@ function suffixOf(rest: string): string {
   return rest.replace(/^\s*,?\s*/, "").trim();
 }
 
-/** One `;`-separated part of a bracket as a cited work, or null without a key. */
-function parseItem(part: string): CitedItem | null {
-  for (let at = part.indexOf("@"); at !== -1; at = part.indexOf("@", at + 1)) {
-    const found = citationAt(part, at + 1);
+/** One `;`-separated part of a bracket as a cited work, or null without a key.
+ * `flat` is the part with its nested brackets blanked, where the key is read. */
+function parseItem(part: string, flat: string): CitedItem | null {
+  for (let at = flat.indexOf("@"); at !== -1; at = flat.indexOf("@", at + 1)) {
+    const found = citationAt(flat, at + 1);
     if (found === null || found.key === "") continue;
     const before = part.slice(0, found.from);
     const suppressAuthor = before.endsWith("-");
@@ -125,26 +126,44 @@ function parseItem(part: string): CitedItem | null {
   return null;
 }
 
+/** `text` with each balanced bracket blanked to NULs of the same length. In a
+ * citation a `;` or a key inside one belongs to the text, as in pandoc, and
+ * the first `]` left is the citation's close. */
+function blankNested(text: string): string {
+  let flat = text;
+  for (let last = ""; last !== flat;) {
+    last = flat;
+    flat = flat.replace(/\[[^[\]]*\]/g, (m) => "\0".repeat(m.length));
+  }
+  return flat;
+}
+
 /**
  * Every citation in `text`, in order. A bracket is a citation when each of
  * its `;`-separated parts has a key; otherwise its keys count as in-text
- * citations, as pandoc reads them. Code spans are the caller's business.
+ * citations, as pandoc reads them. The bracket ends at the `]` that balances
+ * it, so `[@a, p. [3]]` is one citation. Code spans are the caller's business.
  */
 export function findCitations(text: string): ParsedCitation[] {
   const citations: ParsedCitation[] = [];
   let pos = 0;
   while (pos < text.length) {
     if (text[pos] === "[") {
-      const close = text.indexOf("]", pos + 1);
-      const nested = text.indexOf("[", pos + 1);
-      if (close !== -1 && (nested === -1 || nested > close)) {
+      const flat = blankNested(text.slice(pos + 1));
+      const length = flat.indexOf("]");
+      if (length !== -1) {
+        const close = pos + 1 + length;
+        const flatParts = flat.slice(0, length).split(";");
         const items: CitedItem[] = [];
-        for (const part of text.slice(pos + 1, close).split(";")) {
-          const item = parseItem(part);
+        let start = pos + 1;
+        for (const flatPart of flatParts) {
+          const part = text.slice(start, start + flatPart.length);
+          start += flatPart.length + 1;
+          const item = parseItem(part, flatPart);
           if (item === null) break;
           items.push(item);
         }
-        if (items.length === text.slice(pos + 1, close).split(";").length) {
+        if (items.length === flatParts.length) {
           citations.push({ from: pos, to: close + 1, items, inText: false });
           pos = close + 1;
           continue;

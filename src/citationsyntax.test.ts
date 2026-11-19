@@ -132,6 +132,29 @@ describe("findCitations", () => {
     ]);
     expect(findCitations("[@a, p. 3; see also]")).toEqual([at(1, 3, "a")]);
   });
+
+  it("ends a bracket at the ] that balances it, as pandoc does", () => {
+    const text = "[@a, p. [3]] and [see @b [sic]; @c, [x; y]].";
+    expect(findCitations(text).map((c) => c.items)).toEqual([
+      [item("a", { suffix: "p. [3]" })],
+      [
+        item("b", { prefix: "see", suffix: "[sic]" }),
+        item("c", { suffix: "[x; y]" }),
+      ],
+    ]);
+  });
+
+  it("gives a key inside a nested bracket to that bracket", () => {
+    expect(findCitations("[see [x @a]]")).toEqual([
+      { from: 5, to: 11, items: [item("a", { prefix: "x" })], inText: false },
+    ]);
+  });
+
+  it("reads the key of an unbalanced bracket as in-text", () => {
+    expect(findCitations("[@a, p. [3]")).toEqual([
+      { from: 1, to: 3, items: [item("a")], inText: true },
+    ]);
+  });
 });
 
 describe("refsegment", () => {
