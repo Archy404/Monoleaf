@@ -402,7 +402,11 @@ fn publishers(entry: &Entry, item: &mut Fields) {
 /// URL, DOI and the identifier fields, which CSL names in capitals; an
 /// eprint on a known site gives the URL when the entry has none.
 fn identifiers(entry: &Entry, item: &mut Fields) {
-    item.set("URL", verbatim(entry, "url"));
+    // The options `url=false` and `doi=false` leave the field out, though an
+    // online entry keeps its URL, as in BibLaTeX.
+    if entry.entry_type == EntryType::Online || !has_option(entry, "url", "false") {
+        item.set("URL", verbatim(entry, "url"));
+    }
     if !item.has("URL") {
         let site = verbatim(entry, "eprinttype")
             .or_else(|| verbatim(entry, "archiveprefix"))
@@ -413,7 +417,9 @@ fn identifiers(entry: &Entry, item: &mut Fields) {
             }
         }
     }
-    item.set("DOI", verbatim(entry, "doi"));
+    if !has_option(entry, "doi", "false") {
+        item.set("DOI", verbatim(entry, "doi"));
+    }
     item.set("ISBN", verbatim(entry, "isbn"));
     item.set("ISSN", verbatim(entry, "issn"));
     item.set("PMID", verbatim(entry, "pmid"));
@@ -473,7 +479,7 @@ fn names(entry: &Entry, item: &mut Fields) {
         Some("director") => "director",
         _ => "editor",
     };
-    let use_prefix = has_option(entry, "useprefix");
+    let use_prefix = has_option(entry, "useprefix", "true");
     for (field, variable) in [
         ("author", "author"),
         ("editor", editor_variable),
@@ -494,15 +500,15 @@ fn names(entry: &Entry, item: &mut Fields) {
     }
 }
 
-/// Whether the entry's `options` field sets the option: `useprefix` alone or
-/// `useprefix=true`, in a comma-separated list.
-fn has_option(entry: &Entry, option: &str) -> bool {
+/// Whether the entry's `options` field, a comma-separated list, gives the
+/// option the value; `useprefix` alone is `useprefix=true`.
+fn has_option(entry: &Entry, option: &str, wanted: &str) -> bool {
     text(entry, "options").is_some_and(|options| {
         options.split(',').any(|setting| {
             let mut parts = setting.splitn(2, '=');
             let key = parts.next().unwrap_or_default().trim();
             let value = parts.next().map_or("true", str::trim);
-            key.eq_ignore_ascii_case(option) && value.eq_ignore_ascii_case("true")
+            key.eq_ignore_ascii_case(option) && value.eq_ignore_ascii_case(wanted)
         })
     })
 }
@@ -1042,6 +1048,26 @@ mod tests {
         assert_eq!(names(&on, "author"), ["Dijk|Dirk|van||"]);
         let off = item("@misc{k, title={T}, author={van Dijk, Dirk}, options={useprefix=false}}");
         assert_eq!(names(&off, "author"), ["Dijk|Dirk||van|"]);
+    }
+
+    #[test]
+    fn the_entry_options_url_false_and_doi_false_leave_the_field_out() {
+        let fields = "title={T}, url={http://u}, doi={1/2}";
+        let doi_off = item(&format!("@article{{k, {fields}, options={{doi=false}}}}"));
+        assert_eq!(string(&doi_off, "DOI"), None);
+        assert_eq!(string(&doi_off, "URL"), Some("http://u"));
+        let url_off = item(&format!(
+            "@article{{k, {fields}, options={{ URL = False }}}}"
+        ));
+        assert_eq!(string(&url_off, "URL"), None);
+        assert_eq!(string(&url_off, "DOI"), Some("1/2"));
+        let plain = item(&format!(
+            "@article{{k, {fields}, options={{doi, url=true}}}}"
+        ));
+        assert_eq!(string(&plain, "URL"), Some("http://u"));
+        assert_eq!(string(&plain, "DOI"), Some("1/2"));
+        let online = item(&format!("@online{{k, {fields}, options={{url=false}}}}"));
+        assert_eq!(string(&online, "URL"), Some("http://u"));
     }
 
     #[test]
