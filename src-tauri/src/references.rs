@@ -90,6 +90,7 @@ pub fn read_biblatex(text: &str, english_document: bool) -> Read {
     // A byte-order mark is no whitespace: left in, it hides the first entry
     // from the cut at every `@`.
     let text = text.trim_start_matches('\u{feff}');
+    let text = &brace_quoted_values(text);
     if let Ok(entries) = biblatex_csl::entries(text) {
         let items = entries
             .iter()
@@ -160,6 +161,71 @@ fn entry_chunks(text: &str) -> Vec<(usize, &str)> {
         .zip(ends)
         .map(|(&(line, start), end)| (line, &text[start..end]))
         .collect()
+}
+
+/// The text with each `"…"` field value that holds a `"` inside braces,
+/// `"a {"}q{"} b"`, delimited by braces instead: `{a {"}q{"} b}`. BibTeX ends
+/// a quoted value at a `"` outside braces only; the parser ends it at the
+/// first `"` and drops the rest of the entry without an error. Only the two
+/// delimiters change, so offsets and line numbers stay.
+fn brace_quoted_values(text: &str) -> String {
+    let bytes = text.as_bytes();
+    let mut out = text.to_owned();
+    let mut depth = 0usize;
+    let mut line_start = true;
+    // A value starts after `=`, or after `#` in a concatenation.
+    let mut after_operator = false;
+    let mut at = 0;
+    while at < bytes.len() {
+        let byte = bytes[at];
+        match byte {
+            b'"' if depth == 1 && after_operator => {
+                let Some((length, braced_quote)) = quoted_value(&bytes[at + 1..]) else {
+                    break;
+                };
+                let end = at + 1 + length;
+                if braced_quote {
+                    out.replace_range(at..=at, "{");
+                    out.replace_range(end..=end, "}");
+                }
+                at = end;
+            }
+            // An entry starts at depth 0 whatever the text before it left.
+            b'@' if line_start => depth = 0,
+            b'{' => depth += 1,
+            b'}' => depth = depth.saturating_sub(1),
+            _ => {}
+        }
+        if byte == b'\n' {
+            line_start = true;
+        } else if !byte.is_ascii_whitespace() {
+            line_start = false;
+            after_operator = matches!(byte, b'=' | b'#');
+        }
+        at += 1;
+    }
+    out
+}
+
+/// The length of a quoted value up to its closing `"`, the first outside
+/// braces, and whether a `"` inside braces comes before it; None when the text
+/// ends first. A backslash escapes the byte after it, as in the parser.
+fn quoted_value(value: &[u8]) -> Option<(usize, bool)> {
+    let mut depth = 0usize;
+    let mut braced_quote = false;
+    let mut at = 0;
+    while at < value.len() {
+        match value[at] {
+            b'"' if depth == 0 => return Some((at, braced_quote)),
+            b'"' => braced_quote = true,
+            b'{' => depth += 1,
+            b'}' => depth = depth.saturating_sub(1),
+            b'\\' => at += 1,
+            _ => {}
+        }
+        at += 1;
+    }
+    None
 }
 
 /// The example bibliography the references dialog writes beside a document.
@@ -663,6 +729,39 @@ mod tests {
         assert_eq!(found.entries[3].year, None);
         assert!(found.warnings.is_empty(), "{:?}", found.warnings);
         assert!(found.warnings.is_empty());
+    }
+
+    #[test]
+    fn a_quote_in_braces_does_not_end_a_quoted_field() {
+        // pandoc's test case escapedquotes, shortened.
+        let bib = r#"@comment{Double quotes escaped using {"}.}
+@ARTICLE{Koff2009-gn,
+  title  = "Irreversible compression ratios
+            ({"}lossy{"} compression)",
+  author = "Koff, David and
+            Volkening, Andrew",
+}
+"#;
+        let found = references_from_biblatex(bib);
+        let entry = &found.entries[0];
+        assert_eq!(entry.authors, ["Koff, David", "Volkening, Andrew"]);
+        let title = r#"Irreversible compression ratios ("lossy" compression)"#;
+        assert_eq!(entry.title, title);
+        assert!(found.warnings.is_empty(), "{:?}", found.warnings);
+        // In an abbreviation and in a concatenation too.
+        let bib = r#"@string{q = "{"}q{"}"} @misc{m, title = "A" # "{"}b{"}" # q}"#;
+        assert_eq!(references_from_biblatex(bib).entries[0].title, r#"A"b""q""#);
+    }
+
+    #[test]
+    fn a_quoted_field_without_a_quote_in_braces_is_left_as_written() {
+        for bib in [
+            r#"@misc{m, title = "A {B} c" # "d"}"#,
+            r#"@misc{m, title = {A "b {"} c"}}"#,
+            r#"@misc{m, title = "M{\"u}ller"}"#,
+        ] {
+            assert_eq!(brace_quoted_values(bib), bib);
+        }
     }
 
     #[test]
