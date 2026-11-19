@@ -228,27 +228,22 @@ fn is_numeric(style: &IndependentStyle) -> bool {
     style.info.category.iter().any(numeric)
 }
 
-/// The bracket a rendered citation opens with: the style's own, else a plain
-/// one, as numeric styles print theirs from inside the layout.
+/// The bracket the style's layout opens a rendered citation with. A style
+/// that brackets each number inside the layout, as ieee does, has none.
 fn opening<'h>(html: &'h str, style: &IndependentStyle) -> Option<&'h str> {
-    let own = style.citation.layout.prefix.as_deref().unwrap_or("");
-    [own, "(", "["]
-        .into_iter()
-        .find(|b| !b.is_empty() && html.starts_with(b))
-        .map(|b| &html[..b.len()])
+    let own = style.citation.layout.prefix.as_deref()?;
+    html.starts_with(own).then(|| &html[..own.len()])
 }
 
 fn closing<'h>(html: &'h str, style: &IndependentStyle) -> Option<&'h str> {
-    let own = style.citation.layout.suffix.as_deref().unwrap_or("");
-    [own, ")", "]"]
-        .into_iter()
-        .find(|b| !b.is_empty() && html.ends_with(b))
-        .map(|b| &html[html.len() - b.len()..])
+    let own = style.citation.layout.suffix.as_deref()?;
+    html.ends_with(own).then(|| &html[html.len() - own.len()..])
 }
 
 /// Pandoc's extras hayagriva has no item for. A suppressed author cuts the
 /// prose form "Doe (2020, p. 3)" at its bracket; the first item's prefix goes
-/// in after the opening bracket, the last item's suffix before the closing one.
+/// in after the layout's opening bracket, the last item's suffix before its
+/// closing one; without them, "see [1]" and "[1], emphasis added".
 fn decorate(
     mut html: String,
     citation: &Citation,
@@ -659,7 +654,7 @@ mod tests {
         );
         assert_eq!(
             ieee.citations[0].as_deref(),
-            Some("[see 1, Ch. 2, emphasis added]")
+            Some("see [1, Ch. 2], emphasis added")
         );
         assert_eq!(ieee.citations[1].as_deref(), Some("[1, p. 3]"));
     }
@@ -687,6 +682,29 @@ mod tests {
         assert_eq!(
             texts("apa"),
             ["Doe &amp; Roe (2020)", "Doe &amp; Roe (2020, p. 3)"]
+        );
+    }
+
+    #[test]
+    fn ieee_prints_prefix_and_comment_outside_the_number_bracket() {
+        let mut references = read_biblatex(BIB, true).references;
+        references.extend(read_csl_yaml(ISSUE_EXAMPLE).unwrap().references);
+        let mut see = cite(&["doe2020"]);
+        see.items[0].prefix = "see".into();
+        let mut page = cite(&["doe2020"]);
+        page.items[0].suffix = "p. 3, emphasis added".into();
+        let mut group = cite(&["doe2020", "ERA5LandHourlyData2019"]);
+        group.items[0].prefix = "see".into();
+        let style = style_named(Some("ieee")).unwrap();
+        let cited = [see, page, group];
+        let out = render(&references, &style, &LocaleCode::en_us(), &cited);
+        assert_eq!(
+            out.citations,
+            [
+                Some("see [1]".into()),
+                Some("[1, p. 3], emphasis added".into()),
+                Some("see [1], [2]".into())
+            ]
         );
     }
 
