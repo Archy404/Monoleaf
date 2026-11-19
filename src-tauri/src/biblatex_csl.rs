@@ -927,8 +927,8 @@ fn titled(entry: &Entry, field: &str, sentence_case: bool) -> Option<String> {
 /// that ends a word (not the one in "a:b", "http://" or "u.s"), gets a
 /// capital unless it has one of its own, as "eBay", or is the title's last
 /// word, as "answer" in "Why cite? answer"; a word with a digit, as
-/// "A2605", stays as written; a hyphen ends a word; what braces protect stays
-/// as written.
+/// "A2605", stays as written; a hyphen and an apostrophe end a word; what
+/// braces protect stays as written.
 fn sentence_case_of(chunks: ChunksRef) -> String {
     let mut out = String::new();
     let mut sentence_start = true;
@@ -945,7 +945,7 @@ fn sentence_case_of(chunks: ChunksRef) -> String {
                         out.push_str(&command_name(&mut chars));
                         continue;
                     }
-                    if c.is_alphanumeric() || c == '\'' || c == '\u{2019}' {
+                    if c.is_alphanumeric() {
                         word.push(c);
                         continue;
                     }
@@ -1568,6 +1568,15 @@ mod tests {
             ("Report: Second Part", "Report: Second part"),
             ("answer", "Answer"),
             ("report. second part", "Report. Second part"),
+            (
+                "O'Brien and Children's Books",
+                "O\u{2019}brien and children\u{2019}s books",
+            ),
+            (
+                "'twas Don't L\u{2019}Enfant Aristotle's Ethics",
+                "\u{2019}Twas don\u{2019}t l\u{2019}enfant aristotle\u{2019}s ethics",
+            ),
+            ("Why? O'Brien", "Why? o\u{2019}brien"),
             ("the u.s. treasury report", "The u.s. Treasury report"),
             ("Apples vs. the Oranges here", "Apples vs. The oranges here"),
             (
