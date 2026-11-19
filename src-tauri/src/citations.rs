@@ -435,6 +435,15 @@ fn html(children: &ElemChildren) -> String {
     out
 }
 
+/// A rendering without a letter or digit, such as the note "." of a style
+/// that prints the number of the note that first cited the work: no request
+/// carries a note number.
+fn is_empty(children: &ElemChildren) -> bool {
+    let mut text = String::new();
+    let _ = children.write_buf(&mut text, BufWriteFormat::Plain);
+    !text.chars().any(char::is_alphanumeric)
+}
+
 fn html_of(child: &ElemChild) -> String {
     let mut out = String::new();
     let _ = escaped_child(child).write_buf(&mut out, BufWriteFormat::Html);
@@ -709,6 +718,15 @@ pub fn render(
         return out;
     };
     for ((index, _), mut citation) in cited.iter().zip(rendered.citations) {
+        if is_empty(&citation.citation) {
+            let name = style.info.id.rsplit('/').next().unwrap_or_default();
+            out.warnings.push(format!(
+                "citation {}: the style {name} prints nothing for it here; \
+                 it stays as written",
+                index + 1
+            ));
+            continue;
+        }
         if !is_prose(&citations[*index], style) {
             place_affixes(
                 &mut citation.citation,
@@ -1054,6 +1072,35 @@ mod tests {
     }
 
     #[test]
+    fn a_citation_rendered_empty_stays_as_written_with_a_warning() {
+        let mut references = read_biblatex(BIB, true).references;
+        references.extend(read_csl_yaml(ISSUE_EXAMPLE).unwrap().references);
+        let mut again = cite(&["doe2020"]);
+        again.in_text = true;
+        let cited = [cite(&["doe2020"]), cite(&["ERA5LandHourlyData2019"]), again];
+        let render_in = |name| {
+            let style = style_named(Some(name)).unwrap();
+            render(&references, &style, &LocaleCode::en_us(), &cited)
+        };
+        let gb = render_in("gb-7714-2015-note");
+        assert!(gb.citations[..2].iter().all(Option::is_some));
+        assert_eq!(gb.citations[2], None);
+        assert_eq!(
+            gb.warnings,
+            [
+                "citation 3: the style china-national-standard-gb-t-7714-2015-note \
+              prints nothing for it here; it stays as written"
+            ]
+        );
+        let notes = render_in("chicago-shortened-notes");
+        assert!(notes.warnings.is_empty(), "{:?}", notes.warnings);
+        assert_eq!(
+            notes.citations[2].as_deref(),
+            Some("Doe and Roe, “A Study”")
+        );
+    }
+
+    #[test]
     fn a_note_starts_with_a_capital_as_in_pandoc() {
         let mut references = read_biblatex(BIB, true).references;
         let berg = "references:\n- id: berg\n  title: Names\n  author:\n  - family: Berg\n    \
@@ -1353,8 +1400,13 @@ mod tests {
                 let locale = locale_named(lang, &style);
                 let out = render(&references, &style, &locale, &cited);
                 assert_eq!(out.citations.len(), 4, "{}", archived.names()[0]);
-                assert!(
-                    out.citations[..3].iter().all(Option::is_some),
+                // hayagriva's own alphanumeric style prints "[]" without a
+                // label where the locator is not read out.
+                let printed = out.citations[..3].iter().flatten().count();
+                let empty = out.warnings.iter().filter(|w| w.contains("prints nothing"));
+                assert_eq!(
+                    printed + empty.count(),
+                    3,
                     "{} {lang:?}: {:?}",
                     archived.names()[0],
                     out.citations
