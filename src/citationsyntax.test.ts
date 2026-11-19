@@ -61,6 +61,15 @@ describe("findCitations", () => {
     ]);
   });
 
+  it("keeps a locator without the comma as the suffix", () => {
+    // pandoc renders [@a p. 3] as page 3, the same as [@a, p. 3]
+    const [found] = findCitations("[@a p. 3; see @b chap. 2 for this]");
+    expect(found.items).toEqual([
+      item("a", { suffix: "p. 3" }),
+      item("b", { prefix: "see", suffix: "chap. 2 for this" }),
+    ]);
+  });
+
   it("reads the in-text form, with or without a bracket after it", () => {
     expect(findCitations("@doe2020 [p. 3] says, and @roe agrees.")).toEqual([
       {
