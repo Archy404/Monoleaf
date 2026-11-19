@@ -170,20 +170,35 @@ const UNDEFINED_ABBREVIATIONS_LIMIT: usize = 16;
 
 /// One chunk parsed with the abbreviations defined so far. An abbreviation
 /// the file never defines is taken as its own text and defined for the
-/// entries after it, with a warning. Any other problem skips the chunk.
+/// entries after it, with a warning. A `$` that opens math nobody closes
+/// runs to the end of the field; the chunk is then read again with its
+/// dollar signs as text, with a warning. Any other problem skips the chunk.
 fn parse_chunk(
     chunk: &str,
     line: usize,
     definitions: &mut String,
     warnings: &mut Vec<String>,
 ) -> Option<biblatex::Bibliography> {
+    let entry = chunk_key(chunk).map_or("entry".to_string(), |key| format!("entry {key}"));
+    // The chunk with every `$` not already escaped written as `\$`.
+    let as_text = chunk.replace('$', r"\$").replace(r"\\$", r"\$");
+    let mut text = chunk.to_string();
+    let mut unclosed_dollar_at = None;
     for _ in 0..UNDEFINED_ABBREVIATIONS_LIMIT {
         // Definitions after the entry, so its lines keep their numbers.
-        let error = match biblatex::Bibliography::parse(&format!("{chunk}\n{definitions}")) {
-            Ok(bibliography) => return Some(bibliography),
+        let error = match biblatex::Bibliography::parse(&format!("{text}\n{definitions}")) {
+            Ok(bibliography) => {
+                if let Some(at) = unclosed_dollar_at {
+                    warnings.push(format!(
+                        "line {at}: {entry} has a $ that is not closed, its dollar signs \
+                         are read as text; write \\$ for a dollar sign"
+                    ));
+                }
+                return Some(bibliography);
+            }
             Err(error) => error,
         };
-        let at = line + line_of(error.span.start.min(chunk.len()), chunk) - 1;
+        let at = line + line_of(error.span.start.min(text.len()), &text) - 1;
         match error.kind {
             biblatex::ParseErrorKind::UnknownAbbreviation(name) => {
                 warnings.push(format!(
@@ -191,13 +206,26 @@ fn parse_chunk(
                 ));
                 definitions.push_str(&format!("@string{{{name} = {{{name}}}}}\n"));
             }
+            biblatex::ParseErrorKind::UnexpectedEof
+                if unclosed_dollar_at.is_none() && as_text != chunk =>
+            {
+                unclosed_dollar_at = Some(at);
+                text = as_text.clone();
+            }
             kind => {
-                warnings.push(format!("line {at}: entry skipped, {kind}"));
+                warnings.push(format!("line {at}: {entry} skipped, {kind}"));
                 return None;
             }
         }
     }
     None
+}
+
+/// The key in a chunk's head `@type{key,`, if it reads as one.
+fn chunk_key(chunk: &str) -> Option<&str> {
+    let key = chunk.split_once(['{', '('])?.1.split_once(',')?.0.trim();
+    let is_key = !key.is_empty() && !key.contains(|c: char| c.is_whitespace() || c == '=');
+    is_key.then_some(key)
 }
 
 /// The entries of CSL-JSON text, the list of items a reference manager exports.
@@ -857,11 +885,29 @@ mod tests {
     }
 
     #[test]
+    fn an_unclosed_dollar_is_read_as_text_with_a_warning_naming_the_entry() {
+        let math = "@misc{c, title={$x^2$}}\n";
+        let found = references_from_biblatex(&format!("@article{{a,\n title={{$14.95}}}}\n{math}"));
+        assert_eq!(found.entries[0].title, "$14.95");
+        assert_eq!(
+            found.entries[1].title,
+            references_from_biblatex(math).entries[0].title
+        );
+        assert_eq!(
+            found.warnings,
+            [
+                "line 2: entry a has a $ that is not closed, its dollar signs are read as text; \
+              write \\$ for a dollar sign"
+            ]
+        );
+    }
+
+    #[test]
     fn a_broken_or_repeated_entry_is_skipped_with_its_line_and_the_rest_stays() {
         let unclosed = "@article{a,\n  title = {Unclosed,\n}\n@misc{b, title = {B}}\n";
         let found = references_from_biblatex(unclosed);
         assert_eq!(found.entries.len(), 1);
-        assert_eq!(found.warnings, ["line 4: entry skipped, expected comma"]);
+        assert_eq!(found.warnings, ["line 4: entry a skipped, expected comma"]);
         let twice = "@misc{a, title = {A}}\n@misc{a, title = {B}}\n@misc{c, title = {C}}\n";
         let found = references_from_biblatex(twice);
         assert_eq!(found.entries.len(), 2);
