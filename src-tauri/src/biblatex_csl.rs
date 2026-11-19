@@ -281,9 +281,34 @@ fn titles(entry: &Entry, item: &mut Fields, english_document: bool) {
         item.set("container-title", text(entry, "journal"));
     }
     item.set("container-title-short", text(entry, "shortjournal"));
-    item.set("collection-title", titled(entry, "series", english));
+    item.set("collection-title", series(entry, english));
     item.set("event", titled(entry, "eventtitle", english));
     item.set("original-title", titled(entry, "origtitle", english));
+}
+
+/// The series. A number is the count of a journal's series and becomes
+/// "3rd series", in English whatever the document's language, as Pandoc
+/// writes it; any other value is a title.
+fn series(entry: &Entry, english: bool) -> Option<String> {
+    match text(entry, "series") {
+        Some(number) if number.bytes().all(|b| b.is_ascii_digit()) => {
+            Some(format!("{} series", ordinal(&number)))
+        }
+        _ => titled(entry, "series", english),
+    }
+}
+
+/// A number with its English ordinal suffix: "st", "nd" and "rd" after a
+/// last digit 1, 2 and 3, except in 11, 12 and 13; "th" otherwise.
+fn ordinal(number: &str) -> String {
+    let suffix = match number.as_bytes() {
+        [.., b'1', b'1' | b'2' | b'3'] => "th",
+        [.., b'1'] => "st",
+        [.., b'2'] => "nd",
+        [.., b'3'] => "rd",
+        _ => "th",
+    };
+    format!("{number}{suffix}")
 }
 
 /// The part of a title before its first colon, the whole title without one.
@@ -1027,6 +1052,27 @@ mod tests {
         assert_eq!(string(&book, "publisher"), Some("P1; P2 and P3"));
         let addressed = item("@book{k, title={T}, address={A1 and A2}, location={L}}");
         assert_eq!(string(&addressed, "publisher-place"), Some("A1; A2"));
+    }
+
+    #[test]
+    fn a_numbered_series_is_an_ordinal_series() {
+        let cases = [
+            ("1", "1st series"),
+            ("2", "2nd series"),
+            ("3", "3rd series"),
+            ("4", "4th series"),
+            ("11", "11th series"),
+            ("12", "12th series"),
+            ("13", "13th series"),
+            ("21", "21st series"),
+            ("Quarterly", "Quarterly"),
+        ];
+        for (series, expected) in cases {
+            let article = item(&format!(
+                "@article{{k, title={{T}}, journaltitle={{J}}, series={{{series}}}}}"
+            ));
+            assert_eq!(string(&article, "collection-title"), Some(expected));
+        }
     }
 
     #[test]
