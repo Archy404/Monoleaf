@@ -135,6 +135,10 @@ const TEXT_COMMANDS: [(&str, bool); 28] = [
     ("enquote*", true),
 ];
 
+/// The LaTeX commands without an argument that print a character, as
+/// Pandoc's LaTeX reader prints them.
+const SYMBOL_COMMANDS: [(&str, char); 3] = [("slash", '/'), ("hyphen", '-'), ("ldots", '\u{2026}')];
+
 /// The named HTML references for the characters markup reserves.
 const MARKUP_ENTITIES: [(&str, char); 5] = [
     ("amp", '&'),
@@ -1086,7 +1090,8 @@ fn plain(chunks: ChunksRef) -> String {
 /// Text with TeX's conventions resolved: "--" an en dash, "---" an em dash,
 /// "~" a no-break space, an escaped character the character itself, quotes
 /// and apostrophes the typographic ones, a text command its argument, any
-/// other command with a braced argument nothing, an HTML reference its
+/// other command with a braced argument nothing, a command without one its
+/// symbol or nothing, with the space after it, an HTML reference its
 /// character.
 fn unlatex(raw: &str) -> String {
     let mut out = String::with_capacity(raw.len());
@@ -1125,8 +1130,12 @@ fn unlatex(raw: &str) -> String {
                     }
                     None if chars.next_if_eq(&'{').is_some() => skip_argument(&mut chars),
                     _ => {
-                        out.push(c);
-                        out.push_str(&name);
+                        if let Some((_, symbol)) =
+                            SYMBOL_COMMANDS.iter().find(|(command, _)| *command == name)
+                        {
+                            out.push(*symbol);
+                        }
+                        chars.next_if_eq(&' ');
                     }
                 }
             }
@@ -1451,6 +1460,27 @@ mod tests {
         let entry =
             item(r"@misc{k, title={T}, note={A \foo{a{b}c} \href{u}{x} \textsl{y} \sout{z} B}}");
         assert_eq!(string(&entry, "note"), Some("A  x y z B"));
+    }
+
+    #[test]
+    fn a_command_without_an_argument_prints_nothing_with_the_space_after_it() {
+        let entry =
+            item(r"@misc{k, title={T}, note={A \foo B \protect C \relax D \foo* E\addcomma F}}");
+        assert_eq!(string(&entry, "note"), Some("A B C D EF"));
+        let entry = item(r"@misc{k, title={T}, note={\em text \it B \bf C \sc D}}");
+        assert_eq!(string(&entry, "note"), Some("text B C D"));
+    }
+
+    #[test]
+    fn a_symbol_command_prints_its_character() {
+        let entry = item(r"@misc{k, title={T}, note={A\slash B\hyphen C\ldots D\space E}}");
+        assert_eq!(string(&entry, "note"), Some("A/B-C\u{2026}DE"));
+    }
+
+    #[test]
+    fn a_text_command_with_a_space_before_its_argument_prints_the_argument() {
+        let entry = item(r"@misc{k, title={T}, note={A \emph {x} B}}");
+        assert_eq!(string(&entry, "note"), Some("A x B"));
     }
 
     #[test]
