@@ -350,8 +350,7 @@ fn in_parentheses(html: String) -> String {
 /// an American English locale moves it inside.
 const AFTER_FULL_STOP: [&str; 3] = ["", "”", "’"];
 
-/// Pandoc's form of the in-text citation `@key` in a note style: the note
-/// inside the sentence, without its full stop.
+/// A note as pandoc prints it inside a sentence: without its full stop.
 fn without_full_stop(html: &str) -> String {
     for close in AFTER_FULL_STOP {
         if let Some(note) = html.strip_suffix(close).and_then(|h| h.strip_suffix('.')) {
@@ -403,9 +402,10 @@ fn place_affixes(children: &mut ElemChildren, citation: &Citation, suffixes: &[&
 }
 
 /// hayagriva's prose form "Doe (2020)". Pandoc prints the in-text form of a
-/// numeric style as the bare number, that of a note style as the note.
+/// numeric style as the bare number, that of a note style inside a footnote
+/// as the note.
 fn is_prose(citation: &Citation, style: &IndependentStyle) -> bool {
-    (citation.in_text && !is_numeric(style) && !is_note(style))
+    (citation.in_text && !is_numeric(style) && !(is_note(style) && citation.in_note))
         || suppresses_author(citation, style)
 }
 
@@ -751,10 +751,16 @@ pub fn render(
             ));
             continue;
         }
-        if citation.in_text && is_note(style) {
-            text = without_full_stop(&text);
-        } else if citation.in_note && is_note(style) {
-            text = in_parentheses(text);
+        if is_note(style) {
+            text = match (citation.in_text, citation.in_note) {
+                (true, true) => without_full_stop(&text),
+                // Pandoc's author in the sentence and its footnote, joined:
+                // hayagriva's prose form "Doe (note." loses the closing
+                // bracket behind the note's full stop.
+                (true, false) => format!("{})", without_full_stop(&text)),
+                (false, true) => in_parentheses(text),
+                (false, false) => text,
+            };
         }
         out.citations[*index] = Some(text);
     }
@@ -1055,8 +1061,8 @@ mod tests {
         assert_eq!(
             texts,
             [
-                "Jane Doe and Richard Roe, “A Study,” \
-                 <span style=\"font-style: italic;\">J. Stud.</span> 3 (2020): 1–9",
+                "Jane Doe and Richard Roe (“A Study,” \
+                 <span style=\"font-style: italic;\">J. Stud.</span> 3 (2020): 1–9)",
                 "“A Study.”",
                 "“A Study,” 3."
             ]
@@ -1064,23 +1070,33 @@ mod tests {
     }
 
     #[test]
-    fn the_in_text_form_of_a_note_style_is_the_note_without_its_full_stop() {
+    fn the_in_text_form_of_a_note_style_is_the_author_and_the_note_in_parentheses() {
         let references = read_biblatex(BIB, true).references;
         let mut first = cite(&["doe2020"]);
         first.in_text = true;
         let mut page = first.clone();
         page.items[0].suffix = "p. 3".into();
-        let out = render(
-            &references,
-            &style_named(Some("chicago-shortened-notes")).unwrap(),
-            &LocaleCode::en_us(),
-            &[first, page],
+        let cited = [first.clone(), page, first];
+        let texts = |name| {
+            let style = style_named(Some(name)).unwrap();
+            let out = render(&references, &style, &locale_named(None, &style), &cited);
+            out.citations.into_iter().flatten().collect::<Vec<_>>()
+        };
+        let journal = "<span style=\"font-style: italic;\">J. Stud.</span>";
+        assert_eq!(
+            texts("chicago-notes"),
+            [
+                format!("Jane Doe and Richard Roe (“A Study,” {journal} 3 (2020): 1–9)"),
+                "Doe and Roe (“A Study,” 3)".to_string(),
+                "Doe and Roe (“A Study”)".to_string()
+            ]
         );
         assert_eq!(
-            out.citations,
+            texts("modern-humanities-research-association-notes"),
             [
-                Some("Doe and Roe, “A Study”".to_string()),
-                Some("Doe and Roe, “A Study,” 3".to_string())
+                format!("Jane Doe and Richard Roe (‘A Study’, {journal}, 3 (2020), pp. 1–9)"),
+                "Doe and Roe (‘A Study’, p. 3)".to_string(),
+                "Doe and Roe (‘A Study’)".to_string()
             ]
         );
     }
@@ -1144,12 +1160,12 @@ mod tests {
         };
         let gb = render_in("gb-7714-2015-note");
         assert!(gb.warnings.is_empty(), "{:?}", gb.warnings);
-        assert_eq!(gb.citations[2].as_deref(), Some("同1"));
+        assert_eq!(gb.citations[2].as_deref(), Some("DOE J, ROE R (同1)"));
         let notes = render_in("chicago-shortened-notes");
         assert!(notes.warnings.is_empty(), "{:?}", notes.warnings);
         assert_eq!(
             notes.citations[2].as_deref(),
-            Some("Doe and Roe, “A Study”")
+            Some("Doe and Roe (“A Study”)")
         );
     }
 
