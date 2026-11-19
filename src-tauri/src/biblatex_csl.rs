@@ -225,21 +225,34 @@ pub fn entries(text: &str) -> Result<Vec<Entry>, ParseError> {
     Ok(entries)
 }
 
-/// The fields `child` lacks and takes from the entry `key` names, with those
-/// of that entry's own parent; of two with one name the later wins.
+/// The fields `child` lacks and takes from the entries `keys` names, split at
+/// commas and white space; of two with one name the later wins, and a parent
+/// later in the file comes later, whatever the order of the keys.
 fn from_parent(
     child: &Entry,
-    key: Option<ChunksRef>,
+    keys: Option<ChunksRef>,
     entries: &[Entry],
     depth: usize,
 ) -> Vec<(String, Chunks)> {
-    let key = key.map(|key| key.format_verbatim());
-    let parent = entries
+    let keys = keys.map(|keys| keys.format_verbatim()).unwrap_or_default();
+    let keys: Vec<&str> = keys
+        .split(|c: char| c == ',' || c.is_whitespace())
+        .collect();
+    entries
         .iter()
-        .find(|entry| Some(&entry.key) == key.as_ref());
-    let Some(parent) = parent.filter(|_| depth > 0) else {
-        return Vec::new();
-    };
+        .filter(|entry| depth > 0 && keys.contains(&entry.key.as_str()))
+        .flat_map(|parent| parent_fields(child, parent, entries, depth))
+        .collect()
+}
+
+/// The fields `child` lacks and takes from one parent, with those of that
+/// parent's own parents.
+fn parent_fields(
+    child: &Entry,
+    parent: &Entry,
+    entries: &[Entry],
+    depth: usize,
+) -> Vec<(String, Chunks)> {
     let mut fields = Vec::new();
     let book_author = takes_book_author(&parent.entry_type, &child.entry_type);
     for (name, value) in &parent.fields {
@@ -1813,5 +1826,19 @@ mod tests {
         let own = item_of(&entries[1], true);
         assert_eq!(names(&own, "author"), ["Roe|Richard|||"]);
         assert_eq!(names(&own, "container-author"), ["Doe|Jane|||"]);
+    }
+
+    #[test]
+    fn a_crossref_with_several_keys_takes_from_each_and_the_later_entry_wins() {
+        let entries = entries(
+            "@inbook{part, crossref={a, b}, title={Part}} \
+             @book{b, title={B}, location={There}} \
+             @book{a, title={A}, publisher={Pub}}",
+        )
+        .unwrap();
+        let part = item_of(&entries[0], true);
+        assert_eq!(string(&part, "container-title"), Some("A"));
+        assert_eq!(string(&part, "publisher"), Some("Pub"));
+        assert_eq!(string(&part, "publisher-place"), Some("There"));
     }
 }
