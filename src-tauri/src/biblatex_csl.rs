@@ -928,7 +928,8 @@ fn titled(entry: &Entry, field: &str, sentence_case: bool) -> Option<String> {
 /// capital unless it has one of its own, as "eBay", or is the title's last
 /// word, as "answer" in "Why cite? answer"; a word with a digit, as
 /// "A2605", stays as written; a hyphen and an apostrophe end a word; what
-/// braces protect stays as written.
+/// braces protect stays as written. An HTML reference to a letter is decoded
+/// before casing, Pandoc keeps it as written.
 fn sentence_case_of(chunks: ChunksRef) -> String {
     let mut out = String::new();
     let mut sentence_start = true;
@@ -944,6 +945,16 @@ fn sentence_case_of(chunks: ChunksRef) -> String {
                         out.push(c);
                         out.push_str(&command_name(&mut chars));
                         continue;
+                    }
+                    if c == '&' {
+                        let mut ahead = chars.clone();
+                        if let Some(letter) =
+                            html_reference(&mut ahead).filter(|d| d.is_alphanumeric())
+                        {
+                            word.push(letter);
+                            chars = ahead;
+                            continue;
+                        }
                     }
                     if c.is_alphanumeric() {
                         word.push(c);
@@ -1558,6 +1569,11 @@ mod tests {
                 "iPhone apps and McDonald stories",
             ),
             ("eBay Markets", "eBay markets"),
+            ("&#233;cole Normale Today", "\u{c9}cole normale today"),
+            (
+                "The &Ouml;BB and R&amp;amp;D Map",
+                "The \u{d6}BB and r&amp;d map",
+            ),
             ("Why Cite? A Short Answer", "Why cite? A short answer"),
             ("Why Cite? answer", "Why cite? answer"),
             ("Report: Second", "Report: second"),
