@@ -5,7 +5,7 @@
 
 use biblatex::{
     Bibliography, Chunk, Chunks, ChunksExt, ChunksRef, Date, DateValue as BibDate, Entry,
-    EntryType, ParseError, RawBibliography,
+    EntryType, ParseError, RawBibliography, Spanned,
 };
 use hayagriva::citationberg::json::{
     DateValue, Item, LiteralName, NameItem, NameValue, Value, VecDate, VecDateRange,
@@ -547,13 +547,28 @@ fn titles(entry: &Entry, item: &mut Fields, english_document: bool) {
 
 /// The series. A number is the count of a journal's series and becomes
 /// "3rd series", in English whatever the document's language, as Pandoc
-/// writes it; any other value is a title.
+/// writes it; any other value is a title whose unbraced words that are
+/// BibLaTeX keys print as the key's text, "newseries" as "New series".
 fn series(entry: &Entry, english: bool) -> Option<String> {
-    match text(entry, "series") {
-        Some(number) if number.bytes().all(|b| b.is_ascii_digit()) => {
-            Some(format!("{} series", ordinal(&number)))
-        }
-        _ => titled(entry, "series", english),
+    let chunks: Chunks = entry
+        .get("series")?
+        .iter()
+        .map(|chunk| match &chunk.v {
+            Chunk::Normal(text) => {
+                Spanned::new(Chunk::Normal(keys_resolved(text)), chunk.span.clone())
+            }
+            _ => chunk.clone(),
+        })
+        .collect();
+    let value = plain(&chunks);
+    if value.is_empty() {
+        None
+    } else if value.bytes().all(|b| b.is_ascii_digit()) {
+        Some(format!("{} series", ordinal(&value)))
+    } else if english {
+        Some(unlatex(&sentence_case_of(&chunks)))
+    } else {
+        Some(value)
     }
 }
 
@@ -1466,6 +1481,24 @@ mod tests {
                 "@article{{k, title={{T}}, journaltitle={{J}}, series={{{series}}}}}"
             ));
             assert_eq!(string(&article, "collection-title"), Some(expected));
+        }
+    }
+
+    #[test]
+    fn a_key_in_the_series_prints_its_text_before_sentence_case() {
+        let cases = [
+            ("series={newseries}", "New series"),
+            ("series={Studies: newseries}", "Studies: New series"),
+            ("series={newseries, Studies}", "Newseries, studies"),
+            ("series={{newseries}}", "newseries"),
+            (
+                "series={Studies newseries}, langid={german}",
+                "Studies new series",
+            ),
+        ];
+        for (fields, expected) in cases {
+            let book = item(&format!("@book{{k, title={{T}}, {fields}}}"));
+            assert_eq!(string(&book, "collection-title"), Some(expected));
         }
     }
 
