@@ -8,7 +8,8 @@ use crate::references::{self, header_string, Reference};
 use hayagriva::archive::{locales, ArchivedStyle};
 use hayagriva::citationberg::taxonomy::{Locator, Term};
 use hayagriva::citationberg::{
-    CitationFormat, IndependentStyle, Locale, LocaleCode, Style, StyleCategory, TermForm,
+    CitationFormat, IndependentStyle, Locale, LocaleCode, Style, StyleCategory, StyleClass,
+    TermForm,
 };
 use hayagriva::{
     BibliographyDriver, BibliographyRequest, BufWriteFormat, CitationItem, CitationRequest,
@@ -253,10 +254,18 @@ fn decorate(
     let (Some(first), Some(suffix)) = (citation.items.first(), suffixes.last()) else {
         return html;
     };
+    let bracket = style.citation.layout.prefix.as_deref().unwrap_or("(");
     if suppresses_author(citation, style) {
-        let bracket = style.citation.layout.prefix.as_deref().unwrap_or("(");
         if let Some(at) = html.find(bracket) {
             html.replace_range(..at, "");
+        }
+    }
+    // A note style has no bracket; hayagriva opens the prose form with "("
+    // all the same and ends it with the note's full stop.
+    let prose = citation.in_text || suppresses_author(citation, style);
+    if prose && style.settings.class == StyleClass::Note {
+        if let Some(at) = html.find(bracket) {
+            html.replace_range(at..at + bracket.len(), "");
         }
     }
     let prefix = first.prefix.trim();
@@ -704,6 +713,37 @@ mod tests {
                 Some("see [1]".into()),
                 Some("[1, p. 3], emphasis added".into()),
                 Some("see [1], [2]".into())
+            ]
+        );
+    }
+
+    #[test]
+    fn a_note_style_prints_the_note_without_an_opening_parenthesis() {
+        let references = read_biblatex(BIB, true).references;
+        let mut in_text = cite(&["doe2020"]);
+        in_text.in_text = true;
+        let mut year = cite(&["doe2020"]);
+        year.items[0].suppress_author = true;
+        let mut page = year.clone();
+        page.items[0].suffix = "p. 3".into();
+        let out = render(
+            &references,
+            &style_named(Some("chicago-notes")).unwrap(),
+            &LocaleCode::en_us(),
+            &[in_text, year, page],
+        );
+        let texts: Vec<_> = out
+            .citations
+            .iter()
+            .map(|c| c.as_deref().unwrap())
+            .collect();
+        assert_eq!(
+            texts,
+            [
+                "Jane Doe and Richard Roe “A Study,” \
+                 <span style=\"font-style: italic;\">J. Stud.</span> 3 (2020): 1–9.",
+                "“A Study.”",
+                "“A Study,” 3."
             ]
         );
     }
