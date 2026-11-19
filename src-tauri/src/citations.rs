@@ -300,8 +300,7 @@ fn decorate(
     }
     // A note style has no bracket; hayagriva opens the prose form with "("
     // all the same and ends it with the note's full stop.
-    let prose = citation.in_text || suppresses_author(citation, style);
-    if prose && is_note(style) {
+    if suppresses_author(citation, style) && is_note(style) {
         if let Some(at) = html.find(bracket) {
             html.replace_range(at..at + bracket.len(), "");
         }
@@ -327,6 +326,21 @@ fn decorate(
 /// parentheses, without the note's final period.
 fn in_parentheses(html: String) -> String {
     format!("({})", html.strip_suffix('.').unwrap_or(&html))
+}
+
+/// What follows a note's full stop: nothing, or the closing quotation mark
+/// an American English locale moves it inside.
+const AFTER_FULL_STOP: [&str; 3] = ["", "”", "’"];
+
+/// Pandoc's form of the in-text citation `@key` in a note style: the note
+/// inside the sentence, without its full stop.
+fn without_full_stop(html: &str) -> String {
+    for close in AFTER_FULL_STOP {
+        if let Some(note) = html.strip_suffix(close).and_then(|h| h.strip_suffix('.')) {
+            return format!("{note}{close}");
+        }
+    }
+    html.to_string()
 }
 
 /// The affixes decorate() cannot reach: every prefix but the first item's goes
@@ -524,8 +538,10 @@ pub fn render(
     let mut driver = BibliographyDriver::new();
     for (index, items) in &cited {
         let citation = &citations[*index];
-        // Pandoc prints the in-text form of a numeric style as the bare number.
-        let prose = (citation.in_text && !is_numeric(style)) || suppresses_author(citation, style);
+        // Pandoc prints the in-text form of a numeric style as the bare number,
+        // that of a note style as the note.
+        let prose = (citation.in_text && !is_numeric(style) && !is_note(style))
+            || suppresses_author(citation, style);
         let items = items
             .iter()
             .map(|(reference, cited)| {
@@ -566,7 +582,9 @@ pub fn render(
         let text = html(&citation.citation);
         let citation = &citations[*index];
         let mut text = decorate(text, citation, &suffixes[*index], style);
-        if citation.in_note && !citation.in_text && is_note(style) {
+        if citation.in_text && is_note(style) {
+            text = without_full_stop(&text);
+        } else if citation.in_note && is_note(style) {
             text = in_parentheses(text);
         }
         out.citations[*index] = Some(text);
@@ -868,10 +886,32 @@ mod tests {
         assert_eq!(
             texts,
             [
-                "Jane Doe and Richard Roe “A Study,” \
-                 <span style=\"font-style: italic;\">J. Stud.</span> 3 (2020): 1–9.",
+                "Jane Doe and Richard Roe, “A Study,” \
+                 <span style=\"font-style: italic;\">J. Stud.</span> 3 (2020): 1–9",
                 "“A Study.”",
                 "“A Study,” 3."
+            ]
+        );
+    }
+
+    #[test]
+    fn the_in_text_form_of_a_note_style_is_the_note_without_its_full_stop() {
+        let references = read_biblatex(BIB, true).references;
+        let mut first = cite(&["doe2020"]);
+        first.in_text = true;
+        let mut page = first.clone();
+        page.items[0].suffix = "p. 3".into();
+        let out = render(
+            &references,
+            &style_named(Some("chicago-shortened-notes")).unwrap(),
+            &LocaleCode::en_us(),
+            &[first, page],
+        );
+        assert_eq!(
+            out.citations,
+            [
+                Some("Doe and Roe, “A Study”".to_string()),
+                Some("Doe and Roe, “A Study,” 3".to_string())
             ]
         );
     }
