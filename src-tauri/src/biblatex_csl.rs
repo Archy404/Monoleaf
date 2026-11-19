@@ -386,8 +386,8 @@ fn publishers(entry: &Entry, item: &mut Fields) {
     parts.extend(list(entry, "publisher"));
     item.set("publisher", (!parts.is_empty()).then(|| parts.join("; ")));
     let is_patent = entry.entry_type == EntryType::Patent;
-    let location = text(entry, "location");
-    let address = text(entry, "address");
+    let location = listed(entry, "location");
+    let address = listed(entry, "address");
     if is_patent {
         item.set("publisher-place", address);
         item.set("jurisdiction", location);
@@ -395,7 +395,7 @@ fn publishers(entry: &Entry, item: &mut Fields) {
         item.set("publisher-place", address.or(location));
     }
     item.set("original-publisher", text(entry, "origpublisher"));
-    item.set("original-publisher-place", text(entry, "origlocation"));
+    item.set("original-publisher-place", listed(entry, "origlocation"));
     item.set("event-place", text(entry, "venue"));
 }
 
@@ -715,6 +715,12 @@ fn list(entry: &Entry, field: &str) -> Vec<String> {
     }
 }
 
+/// A list field's parts joined with "; ", or `None` when it has none.
+fn listed(entry: &Entry, field: &str) -> Option<String> {
+    let parts = list(entry, field);
+    (!parts.is_empty()).then(|| parts.join("; "))
+}
+
 /// Chunks as plain text: braces gone, what LaTeX writes as text resolved.
 fn plain(chunks: ChunksRef) -> String {
     unlatex(&chunks.format_verbatim())
@@ -1002,6 +1008,19 @@ mod tests {
             string(&article, "container-title"),
             Some("Journal of Studies")
         );
+    }
+
+    #[test]
+    fn list_fields_join_their_parts_with_a_semicolon() {
+        let book = item(
+            "@book{k, title={T}, location={Durham and London}, origlocation={A and B}, \
+             publisher={P1 and {{P2 and P3}}}}",
+        );
+        assert_eq!(string(&book, "publisher-place"), Some("Durham; London"));
+        assert_eq!(string(&book, "original-publisher-place"), Some("A; B"));
+        assert_eq!(string(&book, "publisher"), Some("P1; P2 and P3"));
+        let addressed = item("@book{k, title={T}, address={A1 and A2}, location={L}}");
+        assert_eq!(string(&addressed, "publisher-place"), Some("A1; A2"));
     }
 
     #[test]
