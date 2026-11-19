@@ -116,10 +116,9 @@ pub fn read_biblatex(text: &str, english_document: bool) -> Read {
         }
         for raw in bibliography.iter() {
             if !keys.insert(raw.key.clone()) {
-                found.warnings.push(format!(
-                    "line {line}: key {} is used again, this entry is skipped",
-                    raw.key
-                ));
+                found
+                    .warnings
+                    .push(format!("line {line}: {}", used_again(&raw.key)));
                 continue;
             }
             let mut item = biblatex_csl::item_of(raw, english_document);
@@ -131,6 +130,12 @@ pub fn read_biblatex(text: &str, english_document: bool) -> Read {
         }
     }
     found
+}
+
+/// The warning for an entry whose key an earlier entry has; the earlier one
+/// is kept.
+fn used_again(key: &str) -> String {
+    format!("key {key} is used again, this entry is skipped")
 }
 
 /// The file cut at every line that starts an entry (`@` at line start), each
@@ -348,6 +353,7 @@ pub struct LoadedReferences {
     pub references: Vec<Reference>,
     pub warnings: Vec<String>,
     pub sources: Vec<Source>,
+    keys: HashSet<String>,
 }
 
 impl LoadedReferences {
@@ -355,10 +361,17 @@ impl LoadedReferences {
         let mut entries = 0;
         match result {
             Ok(found) => {
-                entries = found.references.len();
-                self.references.extend(found.references);
                 let named = found.warnings.iter().map(|w| format!("{name}: {w}"));
                 self.warnings.extend(named);
+                for reference in found.references {
+                    let key = reference.key();
+                    if !self.keys.insert(key.clone()) {
+                        self.warnings.push(format!("{name}: {}", used_again(&key)));
+                        continue;
+                    }
+                    entries += 1;
+                    self.references.push(reference);
+                }
             }
             // Already named: a read refuses with the path in front.
             Err(problem) => self.warnings.push(problem),
@@ -793,6 +806,38 @@ mod tests {
         assert_eq!(unsaved.entries.len(), 1);
         assert!(unsaved.warnings[1].starts_with("refs.bib: save the document first"));
         assert!(load_summaries(None, "references: [\n", false).warnings[0].starts_with("header: "));
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_key_another_source_has_already_is_skipped_with_a_warning() {
+        let dir = std::env::temp_dir().join(format!("monoleaf_again-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(&dir).unwrap();
+        fs::write(
+            dir.join("a.bib"),
+            "@misc{a, title={A}}\n@misc{b, title={B}}\n",
+        )
+        .unwrap();
+        fs::write(dir.join("b.json"), r#"[{"id": "a", "title": "Other"}]"#).unwrap();
+        let doc = dir.join("paper.md");
+        let header = "bibliography: [a.bib, b.json]\nreferences:\n- id: b\n  title: Inline\n";
+        let found = load_summaries(doc.to_str(), header, false);
+        let kept: Vec<(&str, &str)> = found
+            .entries
+            .iter()
+            .map(|e| (e.key.as_str(), e.title.as_str()))
+            .collect();
+        assert_eq!(kept, [("b", "Inline"), ("a", "A")]);
+        assert_eq!(
+            found.warnings,
+            [
+                "a.bib: key b is used again, this entry is skipped",
+                "b.json: key a is used again, this entry is skipped",
+            ]
+        );
+        let counts: Vec<usize> = found.sources.iter().map(|s| s.entries).collect();
+        assert_eq!(counts, [1, 1, 0]);
         let _ = fs::remove_dir_all(&dir);
     }
 
