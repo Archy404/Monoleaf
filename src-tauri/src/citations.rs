@@ -325,6 +325,14 @@ fn decorate(
         let at = html.len() - closing(&html, style).map_or(0, str::len);
         html.insert_str(at, &format!(", {}", escape_html(suffix)));
     }
+    // A style without a year, as modern-language-association, leaves the
+    // prose form's bracket empty without a locator; pandoc leaves it out.
+    let close = style.citation.layout.suffix.as_deref().unwrap_or(")");
+    if let Some(at) = html.rfind(bracket).filter(|_| prose) {
+        if let Some(rest) = html[at + bracket.len()..].trim_start().strip_prefix(close) {
+            html = format!("{}{rest}", html[..at].trim_end());
+        }
+    }
     // The in-text form of a note style prints its author in the sentence.
     if is_note(style) && !citation.in_text {
         capitalise_first(&mut html);
@@ -721,15 +729,7 @@ pub fn render(
         return out;
     };
     for ((index, _), mut citation) in cited.iter().zip(rendered.citations) {
-        if is_empty(&citation.citation) {
-            let name = style.info.id.rsplit('/').next().unwrap_or_default();
-            out.warnings.push(format!(
-                "citation {}: the style {name} prints nothing for it here; \
-                 it stays as written",
-                index + 1
-            ));
-            continue;
-        }
+        let empty = is_empty(&citation.citation);
         if !is_prose(&citations[*index], style) {
             place_affixes(
                 &mut citation.citation,
@@ -740,6 +740,17 @@ pub fn render(
         let text = html(&citation.citation);
         let citation = &citations[*index];
         let mut text = decorate(text, citation, &suffixes[*index], style);
+        // Cutting a suppressed author can leave only the empty bracket,
+        // which decorate() drops.
+        if empty || text.is_empty() {
+            let name = style.info.id.rsplit('/').next().unwrap_or_default();
+            out.warnings.push(format!(
+                "citation {}: the style {name} prints nothing for it here; \
+                 it stays as written",
+                index + 1
+            ));
+            continue;
+        }
         if citation.in_text && is_note(style) {
             text = without_full_stop(&text);
         } else if citation.in_note && is_note(style) {
@@ -1090,6 +1101,34 @@ mod tests {
             out.warnings,
             ["citation 1: the style alphanumeric prints nothing for it here; it stays as written"]
         );
+    }
+
+    #[test]
+    fn a_prose_form_without_a_year_drops_its_empty_parentheses() {
+        let references = read_biblatex(BIB, true).references;
+        let mut prose = cite(&["doe2020"]);
+        prose.in_text = true;
+        let mut page = prose.clone();
+        page.items[0].suffix = "p. 90".into();
+        let mut year = cite(&["doe2020"]);
+        year.items[0].suppress_author = true;
+        let style = style_named(Some("modern-language-association")).unwrap();
+        let out = render(
+            &references,
+            &style,
+            &LocaleCode::en_us(),
+            &[prose, page, year],
+        );
+        assert_eq!(
+            out.citations,
+            [
+                Some("Doe and Roe".into()),
+                Some("Doe and Roe (90)".into()),
+                None
+            ]
+        );
+        assert_eq!(out.warnings.len(), 1, "{:?}", out.warnings);
+        assert!(out.warnings[0].starts_with("citation 3:"));
     }
 
     #[test]
