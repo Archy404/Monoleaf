@@ -224,6 +224,7 @@ fn key_text(value: &str) -> String {
 
 /// Title, container and series. A book with a `maintitle` is a volume of
 /// it: the main title is the title, the book's own becomes the volume title.
+/// A chapter of such a volume is in the main title, its book is the volume.
 /// Titles of an English entry go to sentence case, as Pandoc puts them, so a
 /// style may raise them again; a journal's name keeps its case.
 fn titles(entry: &Entry, item: &mut Fields, english_document: bool) {
@@ -255,7 +256,28 @@ fn titles(entry: &Entry, item: &mut Fields, english_document: bool) {
         };
         item.set("title-short", short);
     }
-    if is_chapter_like(entry) && entry.get("booktitle").is_some() {
+    if is_chapter_like(entry) && entry.get("maintitle").is_some() {
+        item.set(
+            "container-title",
+            joined(
+                entry,
+                "maintitle",
+                "mainsubtitle",
+                "maintitleaddon",
+                english,
+            ),
+        );
+        item.set(
+            "volume-title",
+            joined(
+                entry,
+                "booktitle",
+                "booksubtitle",
+                "booktitleaddon",
+                english,
+            ),
+        );
+    } else if is_chapter_like(entry) && entry.get("booktitle").is_some() {
         item.set(
             "container-title",
             joined(
@@ -996,6 +1018,30 @@ mod tests {
         let volume = item("@book{k, title={Vol. 2}, maintitle={Collected Works}, volume={2}}");
         assert_eq!(string(&volume, "title"), Some("Collected works"));
         assert_eq!(string(&volume, "volume-title"), Some("Vol. 2"));
+    }
+
+    #[test]
+    fn a_chapter_of_a_multi_volume_work_is_in_its_main_title() {
+        let chapter = item(
+            "@incollection{k, title={The Chapter}, booktitle={The Book Title}, \
+             maintitle={Collected Works}, mainsubtitle={A Critical Edition}, volume={3}}",
+        );
+        assert_eq!(
+            string(&chapter, "container-title"),
+            Some("Collected works: A critical edition")
+        );
+        assert_eq!(string(&chapter, "volume-title"), Some("The book title"));
+        assert_eq!(string(&chapter, "volume"), Some("3"));
+        let volume = item(
+            "@book{k, title={The Volume}, maintitle={Collected Works}, \
+             mainsubtitle={A Critical Edition}, volume={3}}",
+        );
+        assert_eq!(
+            string(&volume, "title"),
+            Some("Collected works: A critical edition")
+        );
+        assert_eq!(string(&volume, "volume-title"), Some("The volume"));
+        assert_eq!(string(&volume, "container-title"), None);
     }
 
     #[test]
