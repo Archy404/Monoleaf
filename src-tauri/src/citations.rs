@@ -4,12 +4,13 @@
 //! of the bundled Citation Style Language styles, `lang:` picks the locale.
 //! Custom style files are not read; a style name is all the header can give.
 
-use crate::references::{self, header_string, Reference};
+use crate::references::{self, header_string, Reference, ReferenceFormat};
 use hayagriva::archive::{locales, ArchivedStyle};
+use hayagriva::citationberg::json::{Item, Value};
 use hayagriva::citationberg::taxonomy::{Locator, Term};
 use hayagriva::citationberg::{
-    CitationFormat, IndependentStyle, Locale, LocaleCode, Style, StyleCategory, StyleClass,
-    TermForm,
+    CitationFormat, FontStyle, FontVariant, FontWeight, IndependentStyle, Locale, LocaleCode,
+    Style, StyleCategory, StyleClass, TermForm, VerticalAlign,
 };
 use hayagriva::{
     BibliographyDriver, BibliographyRequest, BufWriteFormat, CitationItem, CitationRequest,
@@ -453,7 +454,7 @@ fn escaped_child(child: &ElemChild) -> ElemChild {
         formatting: f.formatting,
     };
     match child {
-        ElemChild::Text(text) => ElemChild::Text(formatted(text)),
+        ElemChild::Text(text) => rich_text(text),
         ElemChild::Elem(elem) => ElemChild::Elem(Elem {
             children: escaped(&elem.children),
             display: elem.display,
@@ -482,6 +483,126 @@ fn escape_html(text: &str) -> String {
     out
 }
 
+/// What a rich-text tag pair does to the formatting of its text.
+type Format = fn(&mut Formatting);
+
+/// The CSL rich-text tags pandoc reads in CSL data: opening and closing tag,
+/// the private-use mark the pair becomes before hayagriva runs, and the
+/// formatting it gives. hayagriva changes the case of a string as a whole,
+/// which would turn `class` into `Class`; a mark has no case. The marks lie
+/// past biblatex_csl's own, U+E000 to U+E003. `nocase` prints as plain text:
+/// hayagriva cannot keep a CSL string's case.
+const RICH_TEXT: [(&str, &str, char, Format); 6] = [
+    ("<i>", "</i>", '\u{e100}', |f| {
+        f.font_style = FontStyle::Italic
+    }),
+    ("<b>", "</b>", '\u{e101}', |f| {
+        f.font_weight = FontWeight::Bold
+    }),
+    ("<sup>", "</sup>", '\u{e102}', |f| {
+        f.vertical_align = VerticalAlign::Sup
+    }),
+    ("<sub>", "</sub>", '\u{e103}', |f| {
+        f.vertical_align = VerticalAlign::Sub
+    }),
+    (
+        "<span style=\"font-variant:small-caps;\">",
+        "</span>",
+        '\u{e104}',
+        |f| f.font_variant = FontVariant::SmallCaps,
+    ),
+    ("<span class=\"nocase\">", "</span>", '\u{e105}', |_| {}),
+];
+/// Where a rich-text pair closes; the pair it closes is the last one open.
+const RICH_TEXT_CLOSE: char = '\u{e106}';
+
+/// The reference's item with the rich-text tags of its CSL strings as marks;
+/// a `.bib` entry's "<" is text.
+fn rich_text_marked(reference: &Reference) -> Item {
+    let mut item = reference.item.clone();
+    if reference.format == ReferenceFormat::Csl {
+        for value in item.0.values_mut() {
+            if let Value::String(text) = value {
+                *text = marked(text);
+            }
+        }
+    }
+    item
+}
+
+/// The text with each pair of RICH_TEXT that closes in order as its marks;
+/// every other "<" stays.
+fn marked(text: &str) -> String {
+    let mut pieces: Vec<String> = Vec::new();
+    // Each tag still open: its piece and its index in RICH_TEXT.
+    let mut open: Vec<(usize, usize)> = Vec::new();
+    let mut rest = text;
+    while let Some(at) = rest.find('<') {
+        pieces.push(rest[..at].to_string());
+        rest = &rest[at..];
+        let closes = open
+            .last()
+            .filter(|(_, tag)| rest.starts_with(RICH_TEXT[*tag].1))
+            .copied();
+        let tag = if let Some(tag) = RICH_TEXT.iter().position(|t| rest.starts_with(t.0)) {
+            open.push((pieces.len(), tag));
+            pieces.push(RICH_TEXT[tag].0.to_string());
+            RICH_TEXT[tag].0
+        } else if let Some((piece, tag)) = closes {
+            open.pop();
+            pieces[piece] = RICH_TEXT[tag].2.to_string();
+            pieces.push(RICH_TEXT_CLOSE.to_string());
+            RICH_TEXT[tag].1
+        } else {
+            pieces.push("<".to_string());
+            "<"
+        };
+        rest = &rest[tag.len()..];
+    }
+    pieces.push(rest.to_string());
+    pieces.concat()
+}
+
+/// A text leaf escaped, with the marks of RICH_TEXT turned into formatting:
+/// a leaf for each stretch between two marks.
+fn rich_text(text: &Formatted) -> ElemChild {
+    let mut leaves = Vec::new();
+    let mut open: Vec<usize> = Vec::new();
+    let mut stretch = String::new();
+    // The closing mark at the end writes the last stretch.
+    for c in text.text.chars().chain([RICH_TEXT_CLOSE]) {
+        let tag = RICH_TEXT.iter().position(|t| t.2 == c);
+        if tag.is_none() && c != RICH_TEXT_CLOSE {
+            stretch.push(c);
+            continue;
+        }
+        if !stretch.is_empty() {
+            let mut formatting = text.formatting;
+            for &tag in &open {
+                (RICH_TEXT[tag].3)(&mut formatting);
+            }
+            leaves.push(ElemChild::Text(Formatted {
+                text: escape_html(&std::mem::take(&mut stretch)),
+                formatting,
+            }));
+        }
+        match tag {
+            Some(tag) => open.push(tag),
+            None => {
+                open.pop();
+            }
+        }
+    }
+    match leaves.len() {
+        1 => leaves.remove(0),
+        _ => ElemChild::Elem(Elem {
+            children: ElemChildren(leaves),
+            display: None,
+            meta: None,
+        }),
+    }
+}
+
 /// Renders the citations in document order and the reference list, in one
 /// hayagriva run over every reference.
 pub fn render(
@@ -494,9 +615,10 @@ pub fn render(
         citations: vec![None; citations.len()],
         ..Default::default()
     };
+    let items: Vec<Item> = references.iter().map(rich_text_marked).collect();
     let mut by_key = HashMap::new();
-    for reference in references {
-        by_key.entry(reference.key()).or_insert(&reference.item);
+    for (reference, item) in references.iter().zip(&items) {
+        by_key.entry(reference.key()).or_insert(item);
     }
     let locales = bundled_locales();
     let terms = locator_terms(locales, locale);
@@ -658,7 +780,7 @@ fn header_truish(front_matter: &str, key: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::references::{read_biblatex, read_csl_yaml};
+    use crate::references::{read_biblatex, read_csl_json, read_csl_yaml};
 
     const BIB: &str = "@article{doe2020, author={Doe, Jane and Roe, Richard}, title={A Study}, \
                        journal={J. Stud.}, year={2020}, volume={3}, pages={1--9}}";
@@ -1279,5 +1401,42 @@ mod tests {
             "{html}"
         );
         assert!(!html.contains("<b>"), "{html}");
+    }
+
+    #[test]
+    fn csl_rich_text_prints_as_formatting_and_other_tags_as_text() {
+        let json = r#"[{"id": "k", "type": "article-journal", "issued": 2020, "container-title": "J",
+            "author": [{"family": "Doe", "given": "Jane"}],
+            "title": "The <i>emphasised</i> word, <i>a <b>b</b></i>, X<sup>2</sup> H<sub>2</sub>O <span style=\"font-variant:small-caps;\">Sc</span> <span class=\"nocase\">iPhone</span>"},
+            {"id": "h", "type": "article-journal", "issued": 2020, "container-title": "J",
+            "author": [{"family": "Roe", "given": "Ann"}],
+            "title": "<script>x</script> <a onclick=\"y\">z</a> 1 < 2 &amp; <I>u</I> <i>open <b>b</i> c</b>"}]"#;
+        let references = read_csl_json(json).unwrap().references;
+        let style = style_named(Some("apa")).unwrap();
+        let out = render(
+            &references,
+            &style,
+            &LocaleCode::en_us(),
+            &[cite(&["k", "h"])],
+        );
+        let italic = |text| format!("<span style=\"font-style: italic;\">{text}</span>");
+        assert_eq!(
+            out.bibliography[0].html,
+            format!(
+                "Doe, J. (2020). The {} word, {}<span style=\"font-style: italic;font-weight: bold;\">b</span>, \
+                 X<span style=\"vertical-align: super;\">2</span> H<span style=\"vertical-align: sub;\">2</span>O \
+                 <span style=\"font-variant: small-caps;\">Sc</span> iPhone. {}.",
+                italic("emphasised"),
+                italic("a "),
+                italic("J")
+            )
+        );
+        assert_eq!(
+            out.bibliography[1].html,
+            "Roe, A. (2020). &lt;script&gt;x&lt;/script&gt; &lt;a onclick=&quot;y&quot;&gt;z&lt;/a&gt; \
+             1 &lt; 2 &amp;amp; &lt;I&gt;u&lt;/I&gt; &lt;i&gt;open \
+             <span style=\"font-weight: bold;\">b&lt;/i&gt; c</span>. \
+             <span style=\"font-style: italic;\">J</span>."
+        );
     }
 }
