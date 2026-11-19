@@ -220,7 +220,11 @@ fn from_parent(
         return Vec::new();
     };
     let mut fields = Vec::new();
+    let book_author = takes_book_author(&parent.entry_type, &child.entry_type);
     for (name, value) in &parent.fields {
+        if name == "author" && book_author && !child.fields.contains_key("bookauthor") {
+            fields.push(("bookauthor".to_string(), value.clone()));
+        }
         if name == HELD_CROSSREF {
             let nested = from_parent(child, Some(value), entries, depth - 1);
             fields.extend(
@@ -235,6 +239,16 @@ fn from_parent(
         }
     }
     fields
+}
+
+/// Whether the child takes the parent's `author` as its `bookauthor` too, as
+/// Pandoc's `transformKey` gives it.
+fn takes_book_author(parent: &EntryType, child: &EntryType) -> bool {
+    use EntryType::*;
+    matches!(
+        (parent, child),
+        (MvBook | Book, InBook | BookInBook | SuppBook) | (MvBook, Book)
+    )
 }
 
 /// The name a parent's field takes in the child, after Pandoc's
@@ -1593,5 +1607,21 @@ mod tests {
         assert_eq!(date(&part, "issued"), "[[1975]] ");
         assert_eq!(string(&part, "publisher"), Some("Pub"));
         assert_eq!(date(&item_of(&entries[1], true), "issued"), "[[1975]] ");
+    }
+
+    #[test]
+    fn a_part_of_a_book_takes_the_books_author_as_container_author() {
+        let entries = entries(
+            "@inbook{part, crossref={whole}, title={Part}} \
+             @inbook{own, crossref={whole}, author={Roe, Richard}, title={Own}} \
+             @book{whole, author={Doe, Jane}, title={Whole}}",
+        )
+        .unwrap();
+        let part = item_of(&entries[0], true);
+        assert_eq!(names(&part, "author"), ["Doe|Jane|||"]);
+        assert_eq!(names(&part, "container-author"), ["Doe|Jane|||"]);
+        let own = item_of(&entries[1], true);
+        assert_eq!(names(&own, "author"), ["Roe|Richard|||"]);
+        assert_eq!(names(&own, "container-author"), ["Doe|Jane|||"]);
     }
 }
