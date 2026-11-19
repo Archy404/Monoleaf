@@ -102,11 +102,10 @@ const EPRINT_SITES: [(&str, &str); 4] = [
 
 /// The LaTeX commands whose argument prints as its text, and whether Pandoc
 /// sets it in quotation marks. Pandoc sets the others in italics, bold, small
-/// caps, superscript or subscript, which item text cannot carry. The argument
-/// of `uppercase` and `lowercase` keeps its case, which Pandoc changes. A
+/// caps, superscript or subscript, which item text cannot carry. A
 /// declaration such as `em` takes no argument; Pandoc prints the group after
 /// it as one.
-const TEXT_COMMANDS: [(&str, bool); 39] = [
+const TEXT_COMMANDS: [(&str, bool); 36] = [
     ("emph", false),
     ("textit", false),
     ("textbf", false),
@@ -140,9 +139,6 @@ const TEXT_COMMANDS: [(&str, bool); 39] = [
     ("scshape", false),
     ("slshape", false),
     ("ttfamily", false),
-    ("uppercase", false),
-    ("MakeUppercase", false),
-    ("lowercase", false),
     ("mkbibquote", true),
     ("enquote", true),
     ("enquote*", true),
@@ -151,6 +147,17 @@ const TEXT_COMMANDS: [(&str, bool); 39] = [
 /// The LaTeX commands without an argument that print a character, as
 /// Pandoc's LaTeX reader prints them.
 const SYMBOL_COMMANDS: [(&str, char); 3] = [("slash", '/'), ("hyphen", '-'), ("ldots", '\u{2026}')];
+
+/// The LaTeX commands that change the case of their argument, and whether to
+/// upper case, as Pandoc's LaTeX reader does.
+const CASE_COMMANDS: [(&str, bool); 6] = [
+    ("uppercase", true),
+    ("MakeUppercase", true),
+    ("MakeTextUppercase", true),
+    ("lowercase", false),
+    ("MakeLowercase", false),
+    ("MakeTextLowercase", false),
+];
 
 /// The LaTeX commands with two arguments of which Pandoc's LaTeX reader
 /// prints one: whether it is the second, and whether Pandoc sets it in
@@ -1204,6 +1211,18 @@ fn unlatex(raw: &str) -> String {
                         continue;
                     }
                 }
+                let case = CASE_COMMANDS.iter().find(|(command, _)| *command == name);
+                if let Some(&(_, upper)) = case {
+                    if chars.next_if_eq(&'{').is_some() {
+                        let text = unlatex(&argument(&mut chars, '{', '}'));
+                        out.push_str(&if upper {
+                            text.to_uppercase()
+                        } else {
+                            text.to_lowercase()
+                        });
+                        continue;
+                    }
+                }
                 match TEXT_COMMANDS.iter().find(|(command, _)| *command == name) {
                     Some((_, quoted)) if chars.next_if_eq(&'{').is_some() => {
                         out.push_str(if *quoted { "\u{201c}" } else { "" });
@@ -1600,6 +1619,20 @@ mod tests {
             note={A \foo{a}{b} \foo{a}{b}{c} \foo{a} {b} \foo{a}{\bar{x}{y}} \emph{a}{b} B}}";
         let entry = &crate::references::read_biblatex(bib, true).references[0].item;
         assert_eq!(string(entry, "note"), Some("A    b  ab B"));
+    }
+
+    #[test]
+    fn a_case_command_changes_the_case_of_its_argument() {
+        let entry = item(
+            r#"@book{k, title={The \MakeUppercase{nasa} Rocket and \lowercase{NASA Now} End},
+            note={\uppercase{x Ab} \MakeLowercase{X Ab} \uppercase{a \emph{b} {c}} \uppercase{straße}
+            \lowercase{\"{O}}}}"#,
+        );
+        assert_eq!(
+            string(&entry, "title"),
+            Some("The NASA rocket and nasa now end")
+        );
+        assert_eq!(string(&entry, "note"), Some("X AB x ab A B C STRASSE ö"));
     }
 
     #[test]
