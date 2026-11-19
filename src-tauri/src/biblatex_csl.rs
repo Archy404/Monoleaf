@@ -97,6 +97,28 @@ const EPRINT_SITES: [(&str, &str); 4] = [
     ("googlebooks", "https://books.google.com?id="),
 ];
 
+/// The LaTeX commands whose argument prints as its text, and whether Pandoc
+/// sets it in quotation marks. Pandoc sets the others in italics, bold, small
+/// caps, superscript or subscript, which item text cannot carry.
+const TEXT_COMMANDS: [(&str, bool); 16] = [
+    ("emph", false),
+    ("textit", false),
+    ("textbf", false),
+    ("textsc", false),
+    ("textup", false),
+    ("textrm", false),
+    ("textnormal", false),
+    ("textsuperscript", false),
+    ("textsubscript", false),
+    ("mkbibemph", false),
+    ("mkbibitalic", false),
+    ("mkbibbold", false),
+    ("url", false),
+    ("mkbibquote", true),
+    ("enquote", true),
+    ("enquote*", true),
+];
+
 /// The CSL item for one entry. Never fails: a field that cannot be read as
 /// its type is taken as text, a date that is no date becomes the literal
 /// text of the date. `english_document` says whether the citing document is
@@ -771,6 +793,12 @@ fn sentence_case_of(chunks: ChunksRef) -> String {
                 let mut word = String::new();
                 let mut chars = text.chars().peekable();
                 while let Some(c) = chars.next() {
+                    if c == '\\' && chars.peek().is_some_and(char::is_ascii_alphabetic) {
+                        flush_word(&mut word, &mut out, &mut sentence_start);
+                        out.push(c);
+                        out.push_str(&command_name(&mut chars));
+                        continue;
+                    }
                     if c.is_alphanumeric() || c == '\'' || c == '\u{2019}' {
                         word.push(c);
                         continue;
@@ -853,10 +881,11 @@ fn plain(chunks: ChunksRef) -> String {
 
 /// Text with TeX's conventions resolved: "--" an en dash, "---" an em dash,
 /// "~" a no-break space, an escaped character the character itself, quotes
-/// and apostrophes the typographic ones.
+/// and apostrophes the typographic ones, a text command its argument.
 fn unlatex(raw: &str) -> String {
     let mut out = String::with_capacity(raw.len());
     let mut chars = raw.chars().peekable();
+    let mut closers = Vec::new();
     while let Some(c) = chars.next() {
         match c {
             '`' if chars.peek() == Some(&'`') => {
@@ -881,10 +910,33 @@ fn unlatex(raw: &str) -> String {
             '\\' if chars.peek().is_some_and(|next| "&%$#_{}".contains(*next)) => {
                 out.push(chars.next().unwrap_or_default());
             }
+            '\\' if chars.peek().is_some_and(char::is_ascii_alphabetic) => {
+                let name = command_name(&mut chars);
+                match TEXT_COMMANDS.iter().find(|(command, _)| *command == name) {
+                    Some((_, quoted)) if chars.next_if_eq(&'{').is_some() => {
+                        out.push_str(if *quoted { "\u{201c}" } else { "" });
+                        closers.push(if *quoted { "\u{201d}" } else { "" });
+                    }
+                    _ => {
+                        out.push(c);
+                        out.push_str(&name);
+                    }
+                }
+            }
+            '{' => {
+                out.push(c);
+                closers.push("}");
+            }
+            '}' => out.push_str(closers.pop().unwrap_or("}")),
             _ => out.push(c),
         }
     }
     out.trim().to_string()
+}
+
+/// The name of the LaTeX command after a "\", with the "*" of a starred form.
+fn command_name(chars: &mut std::iter::Peekable<std::str::Chars>) -> String {
+    std::iter::from_fn(|| chars.next_if(|c| c.is_ascii_alphabetic() || *c == '*')).collect()
 }
 
 #[cfg(test)]
@@ -1126,6 +1178,22 @@ mod tests {
             Some("Café NASA \u{2014} a tale, 1\u{2013}2 & more\u{a0}here")
         );
         assert_eq!(names(&item, "author"), ["Müller|Hans|||"]);
+    }
+
+    #[test]
+    fn text_commands_print_their_argument_and_quoting_commands_quote_it() {
+        let cases = [
+            ("\\emph{De Anima} \\textsc{mcxcviii}", "De Anima mcxcviii"),
+            ("\\textit{I} \\textbf{B} \\url{x.org}", "I B x.org"),
+            ("\\mkbibquote{De} \\enquote*{A--B}", "“De” “A–B”"),
+            ("\\emph{A \\foo{x} \\enquote{B}} C", "A \\foo{x} “B” C"),
+        ];
+        for (title, expected) in cases {
+            let entry = item(&format!("@book{{k, title={{{title}}}, langid={{german}}}}"));
+            assert_eq!(string(&entry, "title"), Some(expected), "{title}");
+        }
+        let english = item("@book{k, title={\\emph{the Title} Rest}}");
+        assert_eq!(string(&english, "title"), Some("The title rest"));
     }
 
     #[test]
