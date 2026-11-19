@@ -486,6 +486,28 @@ function documentEvents(tokens: Token[]): DocumentEvent[] {
   return events;
 }
 
+/** Flags each citation inside a footnote, except one that opens it, as
+ * pandoc reads them: the opening one is the note itself. */
+function flagNoteCitations(tokens: Token[], cited: ParsedCitation[]): void {
+  let inside = false;
+  let opening = false;
+  for (const token of tokens) {
+    if (token.type === "footnote_open") {
+      inside = opening = true;
+    } else if (token.type === "footnote_close") {
+      inside = false;
+    }
+    (token.children ?? []).forEach((child, i) => {
+      if (inside && child.type === "citation" && !(opening && i === 0)) {
+        cited[(child.meta as { index: number }).index].inNote = true;
+      }
+    });
+    if (token.type === "inline") {
+      opening = false;
+    }
+  }
+}
+
 /** The citations' indices in document order, as the backend numbers them;
  * a citation the document does not print, in an unused footnote, last. */
 function citationOrder(
@@ -1005,6 +1027,7 @@ export async function renderDocumentHtmlAsync(
   const sources = collectImageSources(tokens);
   const cited = env.citations ?? [];
   const events = documentEvents(tokens);
+  flagNoteCitations(tokens, cited);
   // The backend numbers citations in the order it gets them.
   const order = citationOrder(events, cited.length);
   // Images and citations load side by side; each is skipped when the

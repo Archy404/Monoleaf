@@ -72,7 +72,7 @@ function cursorOnLine(state: EditorState, from: number, to: number): boolean {
   );
 }
 
-const DEF_RE = /^(\s*)\[\^([^\]\s]+)\]:[ \t]?/;
+export const DEF_RE = /^(\s*)\[\^([^\]\s]+)\]:[ \t]?/;
 const REF_RE = /\[\^([^\]\s]+)\]/g;
 
 // Scan one line, classifying the definition marker (if any) and references.

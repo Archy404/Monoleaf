@@ -104,6 +104,9 @@ export interface ParsedCitation {
   items: CitedItem[];
   /** The `@a` form outside brackets: "Doe (2020)" rather than "(Doe 2020)". */
   inText: boolean;
+  /** Inside a footnote, not at its start: a note style prints it in
+   * parentheses. The export and the live view set it, not the parser. */
+  inNote?: boolean;
 }
 
 /** What follows a key, without the comma that pandoc allows after it. */

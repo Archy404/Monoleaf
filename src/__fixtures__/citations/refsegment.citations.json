@@ -62,7 +62,8 @@
         "suppressAuthor": false
       }
     ],
-    "inText": false
+    "inText": false,
+    "inNote": true
   },
   {
     "from": 0,

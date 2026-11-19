@@ -247,6 +247,20 @@ describe("live citations", () => {
     expect(shown).toEqual(["[1]", "[3]", "[2]"]);
   });
 
+  it("flags a citation inside a footnote unless it opens the footnote", async () => {
+    const sent: string[] = [];
+    const { render } = stub();
+    const flagged: LiveRenderer = (header, citations) => {
+      sent.push(...citations.map((c) => c.items[0].key + (c.inNote ?? "")));
+      return render(header, citations);
+    };
+    const doc =
+      REFS + "A [@a].[^1][^2]\n\n[^1]: [@b] then *[@c]*.\n\n[^2]: See [@d].\n";
+    open(doc, flagged);
+    await settle();
+    expect(sent).toEqual(["a", "b", "ctrue", "dtrue"]);
+  });
+
   it("shows a note at every refs block when the header suppresses the list", async () => {
     const doc =
       "---\nbibliography: r.bib\nsuppress-bibliography: true\n---\n\n" +

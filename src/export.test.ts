@@ -392,6 +392,21 @@ describe("renderDocumentHtml", () => {
     expect(html).toContain('Note <span class="citation">[2]</span>.');
   });
 
+  it("flags a citation inside a footnote unless it opens the footnote", async () => {
+    const sent: string[] = [];
+    await renderDocumentHtmlAsync(
+      REFS + "A [@a].[^1][^2]\n\n[^1]: [@b] then *[@c]*.\n\n[^2]: See [@d].\n",
+      "enhanced",
+      false,
+      () => Promise.resolve(new Map()),
+      (citations) => {
+        sent.push(...citations.map((c) => c.items[0].key + (c.inNote ?? "")));
+        return Promise.reject(new Error("not rendered"));
+      },
+    ).catch(() => undefined);
+    expect(sent).toEqual(["a", "b", "ctrue", "dtrue"]);
+  });
+
   it("puts the list before the footnotes when the document has no #refs block", async () => {
     const doc = REFS + "See [@a][^1].\n\n[^1]: Note\n";
     const html = await renderDocumentHtmlAsync(

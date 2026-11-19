@@ -36,7 +36,7 @@ import {
   type SegmentEvent,
   namesReferences,
 } from "./citationsyntax";
-import { footnoteLabelAt, footnoteRefPos } from "./footnotes";
+import { DEF_RE, footnoteLabelAt, footnoteRefPos } from "./footnotes";
 import type { RenderedCitations } from "./export";
 import { getCurrentDocumentPath } from "./localimages";
 import { frontMatter } from "./meta";
@@ -93,6 +93,14 @@ function collect(state: EditorState): Found[] {
     for (const citation of findCitations(line.text)) {
       const from = line.from + citation.from;
       if (ancestorMatches(state, from, CODE_NODE)) continue;
+      // Inside a footnote and not at its start, as the export flags it.
+      const def = DEF_RE.exec(line.text);
+      const opens =
+        def !== null &&
+        line.text.slice(def[0].length, citation.from).trim() === "";
+      if (footnoteLabelAt(state, from) !== null && !opens) {
+        citation.inNote = true;
+      }
       found.push({ from, to: line.from + citation.to, citation });
     }
   }
