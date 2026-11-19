@@ -244,6 +244,27 @@ describe("renderDocumentHtml", () => {
     );
   });
 
+  it("leaves an @ after a letter of any script as text", async () => {
+    const asked: string[] = [];
+    await renderDocumentHtmlAsync(
+      REFS + "ü@doe2020 and jane@doe.org\n",
+      "strict",
+      false,
+      () => Promise.resolve(new Map()),
+      (citations) => {
+        asked.push(...citations.flatMap((c) => c.items.map((i) => i.key)));
+        return Promise.resolve({
+          citations: [],
+          bibliography: [],
+          hangingIndent: false,
+          title: null,
+          warnings: [],
+        });
+      },
+    );
+    expect(asked).toEqual([]);
+  });
+
   describe("the refs blocks, as pandoc fills them", () => {
     const stub = () =>
       Promise.resolve({

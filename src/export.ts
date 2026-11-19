@@ -5,6 +5,7 @@ import sup from "markdown-it-sup";
 import footnotePlugin from "markdown-it-footnote";
 import {
   findCitations,
+  KEY_START,
   REFS_CLOSE_RE,
   REFS_OPEN_RE,
   refsClasses,
@@ -662,7 +663,7 @@ function installCitations(md: InstanceType<typeof MarkdownIt>): void {
       if (ch !== "[" && ch !== "@") return false;
       // The parser only sees the slice from here on, so the e-mail check on
       // the character before the `@` happens here.
-      if (ch === "@" && /[A-Za-z0-9_]/.test(state.src[state.pos - 1] ?? ""))
+      if (ch === "@" && KEY_START.test(state.src[state.pos - 1] ?? ""))
         return false;
       // A citation does not cross a line; the slice keeps the scan short.
       const lineEnd = state.src.indexOf("\n", state.pos);

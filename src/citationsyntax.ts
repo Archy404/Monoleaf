@@ -24,7 +24,7 @@ export function namesReferences(header: string): boolean {
   return NAMES_REFERENCES.test(header);
 }
 
-const KEY_START = /[\p{L}\p{N}_]/u;
+export const KEY_START = /[\p{L}\p{N}_]/u;
 const KEY_CHAR = /[\p{L}\p{N}_:.#$%&\-+?<>~/]/u;
 
 /**
