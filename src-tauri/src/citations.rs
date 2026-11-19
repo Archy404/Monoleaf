@@ -87,6 +87,10 @@ pub struct Citation {
     /// The in-text form `@key`: "Doe (2020)" rather than "(Doe 2020)".
     #[serde(default)]
     pub in_text: bool,
+    /// Inside a footnote, not at its start: a note style prints it in
+    /// parentheses, as the footnote already is the note.
+    #[serde(default)]
+    pub in_note: bool,
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Eq, serde::Deserialize)]
@@ -319,6 +323,23 @@ fn decorate(
     html
 }
 
+fn is_note(style: &IndependentStyle) -> bool {
+    style.info.category.iter().any(|category| {
+        matches!(
+            category,
+            StyleCategory::CitationFormat {
+                format: CitationFormat::Note
+            }
+        )
+    })
+}
+
+/// Pandoc's form of a citation inside a footnote in a note style: in
+/// parentheses, without the note's final period.
+fn in_parentheses(html: String) -> String {
+    format!("({})", html.strip_suffix('.').unwrap_or(&html))
+}
+
 /// Only a citation of one work drops its author; numeric styles never do.
 fn suppresses_author(citation: &Citation, style: &IndependentStyle) -> bool {
     citation.items.len() == 1 && citation.items[0].suppress_author && !is_numeric(style)
@@ -502,7 +523,11 @@ pub fn render(
     };
     for ((index, _), citation) in cited.iter().zip(rendered.citations) {
         let text = html(&citation.citation);
-        let text = decorate(text, &citations[*index], &suffixes[*index], style);
+        let citation = &citations[*index];
+        let mut text = decorate(text, citation, &suffixes[*index], style);
+        if citation.in_note && !citation.in_text && is_note(style) {
+            text = in_parentheses(text);
+        }
         out.citations[*index] = Some(text);
     }
     if let Some(list) = rendered.bibliography {
@@ -575,7 +600,31 @@ mod tests {
         Citation {
             items: items.collect(),
             in_text: false,
+            in_note: false,
         }
+    }
+
+    #[test]
+    fn a_citation_inside_a_footnote_prints_in_parentheses_in_note_styles() {
+        let references = read_biblatex(BIB, true).references;
+        let mut noted = cite(&["doe2020"]);
+        noted.items[0].suffix = "p. 40".into();
+        noted.in_note = true;
+        let mut prose = noted.clone();
+        prose.in_text = true;
+        let mut opening = noted.clone();
+        opening.in_note = false;
+        let cited = [opening, noted, prose];
+        let render_in = |name| {
+            let style = style_named(Some(name)).unwrap();
+            render(&references, &style, &LocaleCode::en_us(), &cited).citations
+        };
+        let chicago = render_in("chicago-notes");
+        assert!(chicago[0].as_deref().unwrap().ends_with("40."));
+        assert_eq!(chicago[1].as_deref(), Some("(Doe and Roe, “A Study,” 40)"));
+        assert!(!chicago[2].as_deref().unwrap().starts_with('('));
+        let apa = render_in("apa");
+        assert_eq!(apa[1].as_deref(), Some("(Doe &amp; Roe, 2020, p. 40)"));
     }
 
     #[test]
