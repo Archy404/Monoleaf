@@ -430,12 +430,14 @@ pub fn render(
     let mut driver = BibliographyDriver::new();
     for (index, items) in &cited {
         let citation = &citations[*index];
+        // Pandoc prints the in-text form of a numeric style as the bare number.
+        let prose = (citation.in_text && !is_numeric(style)) || suppresses_author(citation, style);
         let items = items
             .iter()
             .map(|(reference, cited)| {
                 let locator = split_locator(&cited.suffix, &terms).0;
                 let item = CitationItem::with_locator(*reference, locator);
-                match citation.in_text || suppresses_author(citation, style) {
+                match prose {
                     true => item.kind(CitePurpose::Prose),
                     false => item,
                 }
@@ -660,6 +662,32 @@ mod tests {
             Some("[see 1, Ch. 2, emphasis added]")
         );
         assert_eq!(ieee.citations[1].as_deref(), Some("[1, p. 3]"));
+    }
+
+    #[test]
+    fn in_text_form_prints_the_name_only_in_author_date_styles() {
+        let references = read_biblatex(BIB, true).references;
+        let mut prose = cite(&["doe2020"]);
+        prose.in_text = true;
+        let mut page = prose.clone();
+        page.items[0].suffix = "p. 3".into();
+        let cited = [prose, page];
+        let texts = |name| {
+            let style = style_named(Some(name)).unwrap();
+            let out = render(&references, &style, &LocaleCode::en_us(), &cited);
+            out.citations
+                .into_iter()
+                .map(Option::unwrap)
+                .collect::<Vec<_>>()
+        };
+        assert_eq!(texts("ieee"), ["[1]", "[1, p. 3]"]);
+        // Pandoc drops nature's locator too.
+        let one = "<span style=\"vertical-align: super;\">1</span>";
+        assert_eq!(texts("nature"), [one, one]);
+        assert_eq!(
+            texts("apa"),
+            ["Doe &amp; Roe (2020)", "Doe &amp; Roe (2020, p. 3)"]
+        );
     }
 
     #[test]
